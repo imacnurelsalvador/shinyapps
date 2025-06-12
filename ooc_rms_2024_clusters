@@ -1,0 +1,186 @@
+
+
+"
+***************************************************************************
+  app.R
+---------------------
+ Date                 : Jun 2025
+ Developed for        : UNHCR (United Nations High Commissioner) 
+ Copyright            : (C) 2025 by Felipe Carranza
+ Email                : fcarranza@protonmail.com
+
+***************************************************************************
+*                                                                         *
+*   This program is free software; you can redistribute it and/or modify  *
+*   it under the terms of the MIT License *
+*                                                                         *
+*                                                                         *
+***************************************************************************
+
+__author__ = 'Felipe Carranza'
+__date__ = 'Jun 2025'
+__copyright__ = '(C) 2025, Felipe Carranza'
+
+
+"
+library(shiny)
+library(rattle)   # fancyRpartPlot
+library(rpart)
+library(stringr)
+
+# Diccionarios y funciones auxiliares
+# reemplazar_codigos(), %||%, extraer_reglas() (igual que ya tienes)
+
+dicc_SV_NCM1 <- list(
+  "1" = "Vender propiedad u objetos de valor",
+  "2" = "Pedir limosna",
+  "3" = "Mudarse a otra vivienda más económica",
+  "4" = "Enviar a las/os niñas/os a trabajar",
+  "5" = "Enviar a un miembro del hogar a trabajar lejos",
+  "6" = "Realizar actividades riesgosas",
+  "7" = "Matrimonio infantil",
+  "8" = "No pagar la renta",
+  "9" = "Usar ahorro o pedir prestado dinero",
+  "10" = "Reducir gasto en artículos no esenciales",
+  "11" = "Ninguno de los mecanismos de afrontamiento"
+)
+
+dicc_SV_NCM2 <- list(
+  "1" = "Consumir alimentos más económicos",
+  "2" = "Pedir comida a amigos o familiares",
+  "3" = "Reducción en la cantidad de alimentos",
+  "4" = "Limitar consumo entre adultos y priorizar niñas/os",
+  "5" = "Reducir número de comidas al día",
+  "6" = "Ninguno de los mecanismos de afrontamiento de alimentación"
+)
+
+dicc_GBV01 <- list(
+  "GBV01a=1" = "Utilizó servicios de salud - GVB ",
+  "GBV01a=0" = "No utilizó servicios de salud  - GVB"
+)
+
+dicc_urgent_needs <- list(
+  "urgent_needs_11=1" = "Necesidades urgentes presentes",
+  "urgent_needs_11=0" = "No hay necesidades urgentes"
+)
+
+# Función para reemplazar los códigos por texto
+reemplazar_codigos <- function(texto) {
+  
+  texto <- str_replace_all(texto, "SV_NCM1_([0-9]+)=1", function(m){
+    num <- str_match(m, "SV_NCM1_([0-9]+)=1")[,2]
+    paste0(dicc_SV_NCM1[[num]] %||% m, " = Sí")
+  })
+  texto <- str_replace_all(texto, "SV_NCM1_([0-9]+)=0", function(m){
+    num <- str_match(m, "SV_NCM1_([0-9]+)=0")[,2]
+    paste0(dicc_SV_NCM1[[num]] %||% m, " = No")
+  })
+  
+  texto <- str_replace_all(texto, "SV_NCM2_([0-9]+)=1", function(m){
+    num <- str_match(m, "SV_NCM2_([0-9]+)=1")[,2]
+    paste0(dicc_SV_NCM2[[num]] %||% m, " = Sí")
+  })
+  texto <- str_replace_all(texto, "SV_NCM2_([0-9]+)=0", function(m){
+    num <- str_match(m, "SV_NCM2_([0-9]+)=0")[,2]
+    paste0(dicc_SV_NCM2[[num]] %||% m, " = No")
+  })
+  
+  for (k in names(dicc_GBV01)) {
+    texto <- str_replace_all(texto, fixed(k), dicc_GBV01[[k]])
+  }
+  
+  for (k in names(dicc_urgent_needs)) {
+    texto <- str_replace_all(texto, fixed(k), dicc_urgent_needs[[k]])
+  }
+  
+  texto
+}
+
+#%||% <- function(a, b) if (!is.null(a)) a else b
+
+# Función para extraer reglas del modelo
+extraer_reglas <- function(modelo) {
+  nodos_terminales <- modelo$frame[modelo$frame$var == "<leaf>", ]
+  nodos_ids <- as.numeric(rownames(nodos_terminales))
+  
+  reglas <- sapply(nodos_ids, function(nodo){
+    path <- path.rpart(modelo, nodes = nodo, print.it = FALSE)[[1]]
+    regla <- paste(path, collapse = " & ")
+    
+    # Extraer clase asignada en ese nodo
+    clase <- as.character(modelo$frame$yval[nodo == as.numeric(rownames(modelo$frame))])
+    
+    # Información adicional, por ejemplo número de observaciones
+    obs <- modelo$frame$n[rownames(modelo$frame) == as.character(nodo)]
+    
+    paste0("Si ", regla, " → Clase = ", clase, ", Observaciones: ", obs)
+  })
+  
+  reglas
+}
+
+ui <- fluidPage(
+  titlePanel("Visualización del Árbol y Reglas de IDP vrs OOC 2024 RMS"),
+  tabsetPanel(
+    tabPanel("Árbol",  
+             br(),
+             h4("Árbol de clasificación usando fancyRpartPlot"),
+             plotOutput("plotArbol", height = "800px")
+    ),
+    tabPanel("Reglas", 
+             br(),
+             h4("Reglas del árbol de decisión"),
+             verbatimTextOutput("reglasText")
+    ),
+    tabPanel("Variables Importantes", 
+             br(),
+             h4("Importancia de las variables en el modelo"),
+             plotOutput("plotImportancia", height = "500px"),
+             br(),
+             h5("Tabla de importancia:"),
+             tableOutput("tablaImportancia")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  modelo <- readRDS("tree_model_afrontc.RDS")  # Asumido cargado globalmente
+  
+  output$reglasText <- renderText({ 
+    reglas_raw <- extraer_reglas(modelo)
+    reglas_legibles <- sapply(reglas_raw, reemplazar_codigos)
+    paste(reglas_legibles, collapse = "\n\n")
+  })
+  
+  output$plotArbol <- renderPlot({
+    fancyRpartPlot(modelo)
+  })
+  
+  output$plotImportancia <- renderPlot({
+    importancia <- modelo$variable.importance
+    if (!is.null(importancia)) {
+      barplot(sort(importancia, decreasing = TRUE),
+              main = "Importancia de las variables",
+              xlab = "Variables",
+              ylab = "Importancia",
+              col = "steelblue",
+              las = 2,
+              cex.names = 0.9)
+    } else {
+      plot.new()
+      text(0.5, 0.5, "No hay datos de importancia disponibles", cex = 1.5)
+    }
+  })
+  
+  output$tablaImportancia <- renderTable({
+    importancia <- modelo$variable.importance
+    if (!is.null(importancia)) {
+      data.frame(
+        Variable = names(importancia),
+        Importancia = as.numeric(importancia)
+      )
+    }
+  }, striped = TRUE, bordered = TRUE, spacing = "s")
+}
+
+shinyApp(ui, server)
