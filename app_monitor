@@ -1,0 +1,927 @@
+"
+***************************************************************************
+app.R
+---------------------
+Date                 : Jun 2025
+Developed for        : UNHCR (United Nations High Commissioner 
+Copyright            : (C) 2025 by Felipe Carranza
+Email                : fcarranza@protonmail.com
+***************************************************************************
+*                                                                         *
+*   This program is free software; you can redistribute it and/or modify  *
+*   it under the terms of the GPL-3 License *
+*                                                                         *
+*                                                                         *
+***************************************************************************
+
+__author__ = 'Felipe Carranza'
+__date__ = 'Jun 2025'
+__copyright__ = '(C) 2025, Felipe Carranza'
+"
+
+
+#TODO LIST
+Organizar palabras clave para riesgo alto, bajo, medio currently leven distance over lemax
+#Optimizar vectores de palabras clave desde archivo o fuentes de datos externa
+#Finalizar webscraping con selenium (on procces)
+#git ignore rsconnect
+#Eliminar códigos en comentarios
+#Comentar código
+#Las palabras clave son sugeridas al igual que las fuentes RSS, pueden adaptarse
+#lectura de geopackage o geojson para visualizar conteo por departamento
+#Incluir municipios y distritos
+#Exportar  - Descargar noticias del dia.
+#Manejo de usuarios
+#filtrar por palabras clave
+#Mejorar estadística de la zona de mas riesgo
+
+library(shiny)
+library(shinydashboard)
+library(feedeR)
+library(DT)
+library(ggplot2)
+library(tm)
+library(wordcloud)
+library(syuzhet)
+library(lubridate)
+library(httr)
+library(xml2)
+library(rvest)
+library(leaflet)
+library(openssl)
+library(tidytext)
+library(stringr)
+library(reticulate)
+library(textstem)
+library(stringdist)
+library(dplyr)
+library(RecordLinkage)
+
+
+if (!py_module_available("selenium")) {
+  py_install("selenium", envname = "r-reticulate")
+}
+#based on https://github.com/facarranza/new_monitor
+# --- UI ----
+
+ui <- dashboardPage(
+  dashboardHeader(title = "Monitor de Seguridad - Fuentes abiertas"),
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Dashboard", tabName = "dashboard", icon = icon("shield-alt")),
+      menuItem("Mapa de Incidentes", tabName = "map", icon = icon("map")),
+      menuItem("Análisis de Noticias", tabName = "news", icon = icon("newspaper")),
+      menuItem("Redes Sociales", tabName = "social", icon = icon("twitter")),
+      menuItem("Configuración", tabName = "config", icon = icon("cog"))
+    ),
+    selectizeInput("security_keywords", "Palabras clave de seguridad:",
+                   choices = c(
+                     # Homicidio (40 términos)
+                     "homicidio", "asesinato", "matanza", "crimen violento", "magnicidio", "feminicidio", 
+                     "parricidio", "fratricidio", "uxoricidio", "infanticidio", "sicariato", "ejecución", 
+                     "masacre", "linchamiento", "ajuste de cuentas", "eliminación", "liquidación", 
+                     "exterminio", "aniquilamiento", "mortandad", "carnicería", "degollamiento", 
+                     "descabezamiento", "estrangulamiento", "envenenamiento", "lapidación", "decapitación", 
+                     "desmembramiento", "empalamiento", "ahogamiento", "electrocución", "apuñalamiento", 
+                     "balazo", "tiroteo", "disparo", "herida mortal", "trauma letal", "muerte violenta", 
+                     "crimen pasional",
+                     
+                     # Robo (35 términos)
+                     "robo", "hurto", "latrocinio", "atraco", "rapiña", "despojo", "sustracción", 
+                     "expoliación", "pillaje", "saqueo", "desvalijamiento", "mangazo", "choreo", 
+                     "ratería", "cleptomanía", "estafa", "defraudación", "apropiación indebida", 
+                     "desfalco", "malversación", "peculado", "robo calificado", "robo agravado", 
+                     "robo a mano armada", "robo de vehículos", "robo de casa habitación", 
+                     "robo a transeúntes", "robo a negocios", "robo hormiga", "carterismo", 
+                     "bolseo", "arrebato", "vaciamiento", "despojo violento", "robo de identidad", 
+                     "robo de información",
+                     
+                     # Pandillas/Maras (30 términos)
+                     "pandilla", "maras", "pandillerismo", "clicas", "gangas", "barras", "estructuras", 
+                     "células", "organizaciones criminales", "MS-13", "Barrio 18", "Sureños", 
+                     "Mara Salvatrucha", "Dieciocho", "Calle 18", "pandilla juvenil", "banda criminal", 
+                     "grupo delictivo", "organización ilícita", "crimen organizado", "mafia", "cartel", 
+                     "hermanos", "camaradas", "homeboys", "parches", "galladas", "combos", "ñeros", 
+                     "chavos banda", "tribus urbanas", "grupos de presión ilegal",
+                     
+                     # Extorsión (25 términos)
+                     "extorsión", "chantaje", "cobro de renta", "impuesto de guerra", "vacuna", "cupo", 
+                     "peaje ilegal", "coacción", "presión ilegal", "amenaza extorsiva", "cobro por protección", 
+                     "racketeering", "cobro de piso", "exacción ilegal", "tributo forzado", "mordida sistemática", 
+                     "cobro de derecho de piso", "intimidación económica", "usura", "préstamo gota a gota", 
+                     "cobro de seguridad", "impuesto revolucionario", "tasa revolucionaria", "cobro de cuota", 
+                     "extorsión telefónica", "extorsión digital",
+                     
+                     # Violencia (30 términos)
+                     "violencia", "agresión", "brutalidad", "ensañamiento", "salvajismo", "barbarie", 
+                     "sevicia", "crueldad", "ferocidad", "fiereza", "bestialidad", "inhumanidad", 
+                     "despiadamiento", "maltrato", "vejación", "atropello", "ultraje", "vejamen", 
+                     "opresión", "tiranía", "desmanes", "despotismo", "abuso", "acoso", "hostigamiento", 
+                     "intimidación", "amenaza", "amedrentamiento", "terror psicológico", "violencia intrafamiliar",
+                     
+                     # Crimen (25 términos)
+                     "crimen", "delito", "fechoría", "ilícito", "contravención", "falta", "infracción", 
+                     "acto delictivo", "acción criminal", "acto ilícito", "transgresión", "violación", 
+                     "quebrantamiento", "felonía", "malhechuría", "acción punible", "conducta antisocial", 
+                     "acto vandálico", "acto depredador", "acto criminal", "crimen de lesa humanidad", 
+                     "crimen de guerra", "crimen organizado", "crimen transnacional", "crimen cibernético", 
+                     "crimen económico",
+                     
+                     # Policía (20 términos)
+                     "policía", "PNC", "agentes", "uniformados", "custodios", "guardias", "efectivos", 
+                     "oficiales", "patrulleros", "investigadores", "detectives", "judiciales", "antinarcóticos", 
+                     "antidisturbios", "GEO", "FAES", "tácticos", "preventivos", "fiscales", "cuerpos de seguridad", 
+                     "fuerzas del orden",
+                     
+                     # Ejército (15 términos)
+                     "ejército", "Fuerza Armada", "soldados", "tropas", "batallones", "brigadas", "comandos", 
+                     "fuerzas especiales", "infantería", "artillería", "ingenieros", "zapadores", "paracaidistas", 
+                     "fuerzas conjuntas", "operativos militares", "estado mayor",
+                     
+                     # Narcotráfico (30 términos)
+                     "narco", "narcoactividad", "narcobusiness", "narcomenudeo", "narcomercado", "narcooperaciones", 
+                     "narcorutas", "narcolaboratorios", "narcotanques", "narcosubmarinos", "narcoaviones", 
+                     "narco dólares", "narcofincas", "narcoeconomía", "narcopolítica", "narcocultura", 
+                     "narcoe ejecuciones", "narco tienditas", "narcomantas", "narcomensajes", "narcocorridos", 
+                     "narcofosas", "narcobloqueos", "narcofiestas", "narcoviolencia", "narcoestado", 
+                     "narcogobierno", "narcodiputados", "narcogobernadores", "narcopresidentes", "narcojueces",
+                     
+                     # Tráfico (20 términos)
+                     "tráfico", "contrabando", "trata de personas", "tráfico de órganos", "tráfico de influencias", 
+                     "tráfico de migrantes", "tráfico de armas", "tráfico de especies", "tráfico de arte", 
+                     "tráfico de medicamentos", "tráfico de combustible", "tráfico de datos", "tráfico de información", 
+                     "tráfico de secretos industriales", "tráfico ilícito", "comercio ilegal", "mercado negro", 
+                     "comercio clandestino", "distribución ilegal", "red de distribución", "cadena de suministro ilícita",
+                     
+                     # Armas (20 términos)
+                     "armas", "armamento", "municiones", "pertrechos", "explosivos", "artefactos", "granadas", 
+                     "rifles", "fusiles", "pistolas", "revólveres", "metralletas", "subfusiles", "escopetas", 
+                     "francotiradores", "lanzacohetes", "morteros", "bombas", "cinturones explosivos", "IEDs", 
+                     "armas blancas",
+                     
+                     # Asalto (15 términos)
+                     "asalto", "asalto callejero", "abordaje", "abordaje vehicular", "toma de rehenes", 
+                     "toma de instalaciones", "asalto a mano armada", "atraco violento", "asalto a transportistas", 
+                     "asalto a bancos", "asalto a joyerías", "asalto a camiones de valores", "asalto a residencias", 
+                     "allanamiento", "entrada forzada", "irrupción violenta",
+                     
+                     # Secuestro (15 términos)
+                     "secuestro", "plagio", "retención ilegal", "privación ilegal de libertad", "cautiverio", 
+                     "secuestro exprés", "secuestro virtual", "secuestro extorsivo", "secuestro simple", 
+                     "secuestro político", "secuestro parental", "retención de personas", "cárcel privada", 
+                     "desaparición forzada", "ocultamiento de personas",
+                     
+                     # Lavado de dinero (20 términos)
+                     "lavado", "blanqueo", "legitimación de capitales", "ocultamiento de activos", "triangulación", 
+                     "fachadas comerciales", "empresas pantalla", "testaferrato", "paraísos fiscales", 
+                     "inversiones ficticias", "facturación falsa", "sobrefacturación", "subfacturación", 
+                     "contabilidad creativa", "operaciones simuladas", "transferencias sospechosas", 
+                     "capitales calientes", "dinero negro", "dinero en efectivo", "evasión fiscal", 
+                     "elusión financiera",
+                     
+                     # Términos Adicionales (30 términos)
+                     "toque de queda", "estado de excepción", "régimen de excepción", "allanamientos masivos", 
+                     "detenciones administrativas", "centros de contención", "centros de internamiento", 
+                     "operativos conjuntos", "patrullajes intensivos", "cercos policiales", "cercos militares", 
+                     "inteligencia policial", "inteligencia militar", "infiltrados", "agentes encubiertos", 
+                     "confiscaciones", "incautaciones", "decomisos", "interdicciones", "redadas", "batidas", 
+                     "razzias", "operaciones relámpago", "operaciones sorpresa", "operaciones encubiertas", 
+                     "operaciones de contrainsurgencia", "guerra contra pandillas", "guerra contra el narco", 
+                     "política de mano dura", "planes de seguridad", "derechos humanos", "muerte"
+                   ),
+                   multiple = TRUE,
+                   selected =  c(
+                     # Homicidio (40 términos)
+                     "homicidio", "asesinato", "matanza", "crimen violento", "magnicidio", "feminicidio", 
+                     "parricidio", "fratricidio", "uxoricidio", "infanticidio", "sicariato", "ejecución", 
+                     "masacre", "linchamiento", "ajuste de cuentas", "eliminación", "liquidación", 
+                     "exterminio", "aniquilamiento", "mortandad", "carnicería", "degollamiento", 
+                     "descabezamiento", "estrangulamiento", "envenenamiento", "lapidación", "decapitación", 
+                     "desmembramiento", "empalamiento", "ahogamiento", "electrocución", "apuñalamiento", 
+                     "balazo", "tiroteo", "disparo", "herida mortal", "trauma letal", "muerte violenta", 
+                     "crimen pasional",
+                     
+                     # Robo (35 términos)
+                     "robo", "hurto", "latrocinio", "atraco", "rapiña", "despojo", "sustracción", 
+                     "expoliación", "pillaje", "saqueo", "desvalijamiento", "mangazo", "choreo", 
+                     "ratería", "cleptomanía", "estafa", "defraudación", "apropiación indebida", 
+                     "desfalco", "malversación", "peculado", "robo calificado", "robo agravado", 
+                     "robo a mano armada", "robo de vehículos", "robo de casa habitación", 
+                     "robo a transeúntes", "robo a negocios", "robo hormiga", "carterismo", 
+                     "bolseo", "arrebato", "vaciamiento", "despojo violento", "robo de identidad", 
+                     "robo de información",
+                     
+                     # Pandillas/Maras (30 términos)
+                     "pandilla", "maras", "pandillerismo", "clicas", "gangas", "barras", "estructuras", 
+                     "células", "organizaciones criminales", "MS-13", "Barrio 18", "Sureños", 
+                     "Mara Salvatrucha", "Dieciocho", "Calle 18", "pandilla juvenil", "banda criminal", 
+                     "grupo delictivo", "organización ilícita", "crimen organizado", "mafia", "cartel", 
+                     "hermanos", "camaradas", "homeboys", "parches", "galladas", "combos", "ñeros", 
+                     "chavos banda", "tribus urbanas", "grupos de presión ilegal",
+                     
+                     # Extorsión (25 términos)
+                     "extorsión", "chantaje", "cobro de renta", "impuesto de guerra", "vacuna", "cupo", 
+                     "peaje ilegal", "coacción", "presión ilegal", "amenaza extorsiva", "cobro por protección", 
+                     "racketeering", "cobro de piso", "exacción ilegal", "tributo forzado", "mordida sistemática", 
+                     "cobro de derecho de piso", "intimidación económica", "usura", "préstamo gota a gota", 
+                     "cobro de seguridad", "impuesto revolucionario", "tasa revolucionaria", "cobro de cuota", 
+                     "extorsión telefónica", "extorsión digital",
+                     
+                     # Violencia (30 términos)
+                     "violencia", "agresión", "brutalidad", "ensañamiento", "salvajismo", "barbarie", 
+                     "sevicia", "crueldad", "ferocidad", "fiereza", "bestialidad", "inhumanidad", 
+                     "despiadamiento", "maltrato", "vejación", "atropello", "ultraje", "vejamen", 
+                     "opresión", "tiranía", "desmanes", "despotismo", "abuso", "acoso", "hostigamiento", 
+                     "intimidación", "amenaza", "amedrentamiento", "terror psicológico", "violencia intrafamiliar",
+                     
+                     # Crimen (25 términos)
+                     "crimen", "delito", "fechoría", "ilícito", "contravención", "falta", "infracción", 
+                     "acto delictivo", "acción criminal", "acto ilícito", "transgresión", "violación", 
+                     "quebrantamiento", "felonía", "malhechuría", "acción punible", "conducta antisocial", 
+                     "acto vandálico", "acto depredador", "acto criminal", "crimen de lesa humanidad", 
+                     "crimen de guerra", "crimen organizado", "crimen transnacional", "crimen cibernético", 
+                     "crimen económico",
+                     
+                     # Policía (20 términos)
+                     "policía", "PNC", "agentes", "uniformados", "custodios", "guardias", "efectivos", 
+                     "oficiales", "patrulleros", "investigadores", "detectives", "judiciales", "antinarcóticos", 
+                     "antidisturbios", "GEO", "FAES", "tácticos", "preventivos", "fiscales", "cuerpos de seguridad", 
+                     "fuerzas del orden",
+                     
+                     # Ejército (15 términos)
+                     "ejército", "Fuerza Armada", "soldados", "tropas", "batallones", "brigadas", "comandos", 
+                     "fuerzas especiales", "infantería", "artillería", "ingenieros", "zapadores", "paracaidistas", 
+                     "fuerzas conjuntas", "operativos militares", "estado mayor",
+                     
+                     # Narcotráfico (30 términos)
+                     "narco", "narcoactividad", "narcobusiness", "narcomenudeo", "narcomercado", "narcooperaciones", 
+                     "narcorutas", "narcolaboratorios", "narcotanques", "narcosubmarinos", "narcoaviones", 
+                     "narco dólares", "narcofincas", "narcoeconomía", "narcopolítica", "narcocultura", 
+                     "narcoe ejecuciones", "narco tienditas", "narcomantas", "narcomensajes", "narcocorridos", 
+                     "narcofosas", "narcobloqueos", "narcofiestas", "narcoviolencia", "narcoestado", 
+                     "narcogobierno", "narcodiputados", "narcogobernadores", "narcopresidentes", "narcojueces",
+                     
+                     # Tráfico (20 términos)
+                     "tráfico", "contrabando", "trata de personas", "tráfico de órganos", "tráfico de influencias", 
+                     "tráfico de migrantes", "tráfico de armas", "tráfico de especies", "tráfico de arte", 
+                     "tráfico de medicamentos", "tráfico de combustible", "tráfico de datos", "tráfico de información", 
+                     "tráfico de secretos industriales", "tráfico ilícito", "comercio ilegal", "mercado negro", 
+                     "comercio clandestino", "distribución ilegal", "red de distribución", "cadena de suministro ilícita",
+                     
+                     # Armas (20 términos)
+                     "armas", "armamento", "municiones", "pertrechos", "explosivos", "artefactos", "granadas", 
+                     "rifles", "fusiles", "pistolas", "revólveres", "metralletas", "subfusiles", "escopetas", 
+                     "francotiradores", "lanzacohetes", "morteros", "bombas", "cinturones explosivos", "IEDs", 
+                     "armas blancas",
+                     
+                     # Asalto (15 términos)
+                     "asalto", "asalto callejero", "abordaje", "abordaje vehicular", "toma de rehenes", 
+                     "toma de instalaciones", "asalto a mano armada", "atraco violento", "asalto a transportistas", 
+                     "asalto a bancos", "asalto a joyerías", "asalto a camiones de valores", "asalto a residencias", 
+                     "allanamiento", "entrada forzada", "irrupción violenta",
+                     
+                     # Secuestro (15 términos)
+                     "secuestro", "plagio", "retención ilegal", "privación ilegal de libertad", "cautiverio", 
+                     "secuestro exprés", "secuestro virtual", "secuestro extorsivo", "secuestro simple", 
+                     "secuestro político", "secuestro parental", "retención de personas", "cárcel privada", 
+                     "desaparición forzada", "ocultamiento de personas",
+                     
+                     # Lavado de dinero (20 términos)
+                     "lavado", "blanqueo", "legitimación de capitales", "ocultamiento de activos", "triangulación", 
+                     "fachadas comerciales", "empresas pantalla", "testaferrato", "paraísos fiscales", 
+                     "inversiones ficticias", "facturación falsa", "sobrefacturación", "subfacturación", 
+                     "contabilidad creativa", "operaciones simuladas", "transferencias sospechosas", 
+                     "capitales calientes", "dinero negro", "dinero en efectivo", "evasión fiscal", 
+                     "elusión financiera",
+                     
+                     # Términos Adicionales (30 términos)
+                     "toque de queda", "estado de excepción", "régimen de excepción", "allanamientos masivos", 
+                     "detenciones administrativas", "centros de contención", "centros de internamiento", 
+                     "operativos conjuntos", "patrullajes intensivos", "cercos policiales", "cercos militares", 
+                     "inteligencia policial", "inteligencia militar", "infiltrados", "agentes encubiertos", 
+                     "confiscaciones", "incautaciones", "decomisos", "interdicciones", "redadas", "batidas", 
+                     "razzias", "operaciones relámpago", "operaciones sorpresa", "operaciones encubiertas", 
+                     "operaciones de contrainsurgencia", "guerra contra pandillas", "guerra contra el narco", 
+                     "política de mano dura", "planes de seguridad", "derechos humanos", "muerte"
+                   )),
+    actionButton("refresh", "Actualizar Datos", icon = icon("sync"))
+  ),
+  dashboardBody(
+    tabItems(
+      # Dashboard principal
+      tabItem(tabName = "dashboard",
+              fluidRow(
+                valueBoxOutput("total_incidents"),
+                valueBoxOutput("high_risk_zones"),
+                valueBoxOutput("trend_indicator")
+              ),
+              fluidRow(
+                box(title = "Últimos Incidentes Reportados", width = 12, status = "danger",
+                    DTOutput("incidents_table"),
+                    uiOutput("incident_details")
+                )
+              )
+      ),
+      
+      # Mapa de incidentes
+      # tabItem(tabName = "map",
+      #         box(title = "Mapa de Incidentes de Seguridad", width = 12, status = "primary",
+      #             leafletOutput("security_map"),
+      #             sliderInput("time_range", "Rango de tiempo (días):", 
+      #                         min = 1, max = 30, value = 7)
+      #         )
+      # ),
+      
+      # Análisis de noticias
+      tabItem(tabName = "news",
+              fluidRow(
+                box(title = "Nube de Términos de Seguridad", width = 6, status = "info",
+                    plotOutput("security_wordcloud"),
+                    sliderInput("wordcloud_max", "Máximo de palabras:", 
+                                min = 10, max = 200, value = 50)
+                ),
+                box(title = "Tendencias por Departamento", width = 6, status = "info",
+                    plotOutput("department_trends"),
+                    selectInput("department", "Departamento:",
+                                choices = c("San Salvador", "Santa Ana", "San Miguel", 
+                                            "La Libertad", "Sonsonate", "Usulután",
+                                            "Ahuachapán", "Cabañas", "Chalatenango",
+                                            "Cuscatlán", "La Paz", "La Unión",
+                                            "Morazán", "San Vicente", "NA"))
+                )
+              ),
+              fluidRow(
+                box(title = "Análisis de Sentimiento", width = 12, status = "info",
+                    plotOutput("sentiment_plot"),
+                    radioButtons("sentiment_source", "Fuente:",
+                                 choices = c("Noticias", "Redes Sociales"),
+                                 inline = TRUE)
+                )
+              )
+      ),
+      
+      # Redes sociales
+      tabItem(tabName = "social",
+              box(title = "Monitoreo de Redes Sociales", width = 12, status = "warning",
+                  textInput("twitter_query", "Consulta Twitter:", 
+                            value = "#SeguridadSV OR #ElSalvador"),
+                  actionButton("search_twitter", "Buscar en Twitter"),
+                  DTOutput("tweets_table")
+              )
+      ),
+      
+      # Configuración
+      tabItem(tabName = "config",
+              box(title = "Configuración de Fuentes", width = 12, status = "warning",
+                  textInput("rss_url", "Nueva URL RSS:", 
+                            placeholder = "https://.../rss/"),
+                  textInput("source_name", "Nombre de la fuente:", 
+                            placeholder = "Mi Fuente"),
+                  actionButton("add_feed", "Agregar Fuente", icon = icon("plus")),
+                  hr(),
+                  DTOutput("sources_table"),
+                  actionButton("delete_source", "Eliminar Seleccionada", 
+                               icon = icon("trash"), class = "btn-danger")
+              )
+      )
+    )
+  )
+)
+
+# --- SERVER ----
+
+server <- function(input, output, session) {
+  rss_file_path <- "fuentes_rss.csv"
+  
+  # Reactivos
+  rss_data <- reactiveVal(data.frame())
+  twitter_data <- reactiveVal(data.frame())
+  
+  initial_sources <- if (file.exists(rss_file_path)) {
+    read.csv(rss_file_path, stringsAsFactors = FALSE)
+  } else {
+    data.frame(
+      url = c("https://www.elsalvador.com/rss/", 
+              "https://www.diariocolatino.com/feed/",
+              "https://elfaro.net/edicion/feed"),
+      name = c("El Salvador.com", "Diario Co Latino", "El Faro"),
+      active = c(TRUE, TRUE, TRUE),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  #TODO, palabras duplicadas
+  # PELIGRO ALTO
+  peligro_alto <- c(
+    "homicidio", "asesinato", "matanza", "crimen violento", "magnicidio", "feminicidio", 
+    "parricidio", "fratricidio", "uxoricidio", "infanticidio", "sicariato", "ejecución", 
+    "masacre", "linchamiento", "ajuste de cuentas", "eliminación", "liquidación", 
+    "exterminio", "aniquilamiento", "mortandad", "carnicería", "degollamiento", 
+    "descabezamiento", "estrangulamiento", "lapidación", "decapitación", 
+    "desmembramiento", "empalamiento", "ahogamiento", "electrocución", "apuñalamiento", 
+    "balazo", "tiroteo", "herida mortal", "trauma letal", "muerte violenta", 
+    "crimen pasional", "extorsión", "cobro de renta", "impuesto de guerra", "vacuna", 
+    "maras", "MS-13", "Barrio 18", "crimen organizado", "narcoviolencia", "narcofosas", 
+    "narcoestado", "secuestro", "desaparición forzada", "lavado", 
+    "blanqueo", "muerte", "viola", 
+    # Agregadas:
+    "emboscada", "levantón", "amenaza de muerte", "violencia letal", "represalia",
+    "terrorismo", "reclutamiento forzado", "trata de personas", "tráfico de órganos",
+    "venganzas", "fusilamiento", "cobro extorsivo", "zona roja", "tortura",
+    "violencia sexual", "crimen sexual", "violación", "agresión", "agresión sexual",
+    "abuso sexual", "intento de homicidio", "asesinato múltiple", "asesinato selectivo",
+    "mutilación", "fusilamiento", "hostigamiento", "intimidación", "amenazas",
+    "incendio intencional", "ataque armado", "arma de fuego", "arma blanca", 
+    "violencia armada", "encapuchados", "pandillas", "grupo armado", "zona controlada",
+    "control territorial", "zona de alto riesgo", "zona peligrosa", "zona conflictiva",
+    "violencia estructural", "violencia comunitaria", "vigilantismo", "escuadrones de la muerte"
+  )
+  
+  
+  # PELIGRO MEDIO
+  peligro_medio <- c(
+    "robo a mano armada", "robo agravado", "robo calificado", "asalto", "asalto callejero", 
+    "toma de rehenes", "asalto a transportistas", "asalto a bancos", "allanamiento", 
+    "entrada forzada", "pandilla", "clicas", "banda criminal", "organización ilícita", 
+    "chantaje", "amenaza extorsiva", "coacción", "intimidación económica", 
+    "cobro de cuota", "crimen", "delito", "fechoría", "acto delictivo", "acto criminal", 
+    "violencia", "brutalidad", "maltrato", "hostigamiento", "amedrentamiento", 
+    "narcomenudeo", "narcomantas", "narcobloqueos", "narcomensajes", "tráfico de personas", 
+    "tráfico de órganos", "tráfico de armas", "IEDs", "bombas", "toque de queda", 
+    "estado de excepción", "regimen de excepción", "allanamientos masivos", 
+    "operaciones encubiertas"
+  )
+  
+  # PELIGRO BAJO
+  peligro_bajo <- c(
+    "hurto", "latrocinio", "estafa", "carterismo", "bolseo", "cleptomanía", 
+    "apropiación indebida", "desfalco", "peculado", "ratería", "abuso", "acoso", 
+    "ultraje", "amenaza", "narcocorridos", "narcomercado", "narcofiestas", 
+    "narcoactividad", "tráfico de influencias", "mercado negro", "comercio clandestino", 
+    "trafico de datos", "trafico de información", "armas", "municiones", "explosivos", 
+    "revólveres", "rifles", "escopetas", "fiscales", "guardias", "centros de internamiento", 
+    "patrullajes intensivos", "planes de seguridad", "derechos humanos"
+  )
+  
+  
+  rss_sources <- reactiveVal(initial_sources)
+  
+  # Función para leer y filtrar feeds RSS
+  read_security_feed <- function(url, keywords) {
+    tryCatch({
+      f <- feed.extract(url)
+      if (!is.null(f$items) && nrow(f$items) > 0) {
+        df <- f$items
+        df$pubDate <- parse_date_time(df$date, 
+                                      orders = c("%a, %d %b %Y %H:%M:%S %z", "%Y-%m-%d %H:%M:%S"))
+        df$description <- gsub("<[^>]+>", "", df$description)
+        df <- df[, c("title", "link", "description", "pubDate")]
+        
+        # Filtrar por palabras clave de seguridad
+        pattern <- paste(keywords, collapse = "|")
+        df <- df[grepl(pattern, tolower(paste(df$title, df$description))), ]
+        
+        # Extraer ubicaciones potenciales
+        locations <- c("San Salvador", "Santa Ana", "San Miguel", "La Libertad", 
+                       "Sonsonate", "Usulután", "Ahuachapán", "Cabañas", 
+                       "Chalatenango", "Cuscatlán", "La Paz", "La Unión", 
+                       "Morazán", "San Vicente")
+        
+        location_pattern <- paste(locations, collapse = "|")
+        df$location <- str_extract(paste(df$title, df$description), location_pattern)
+        print(df$location)
+        #if(is.na(df$location)) df$location  <- NA
+        
+        return(df)
+      }
+      data.frame()
+    }, error = function(e) {
+      message("Error leyendo ", url, ": ", e$message)
+      data.frame()
+    })
+  }
+  
+  # Cargar y filtrar feeds de seguridad
+  load_security_feeds <- function() {
+    src <- rss_sources()
+    req(nrow(src) > 0)
+    keywords <- input$security_keywords
+    req(length(keywords) > 0)
+    
+    all <- data.frame()
+    withProgress(message = "Cargando noticias de seguridad...", {
+      actives <- which(src$active)
+      n <- length(actives)
+      for (i in seq_along(actives)) {
+        idx <- actives[i]
+        incProgress(1/n, detail = src$name[idx])
+        tmp <- read_security_feed(src$url[idx], keywords)
+        if (nrow(tmp) > 0) {
+          tmp$source <- src$name[idx]
+          tmp$source_url <- src$url[idx]
+          all <- rbind(all, tmp)
+        }
+      }
+    })
+    
+    if (nrow(all) > 0) {
+      all <- all[!duplicated(all$link), ]
+      all <- all[order(all$pubDate, decreasing = TRUE), ]
+      
+      # Analizar sentimiento
+      text <- tolower(paste(all$title, all$description))
+      sentiment <- get_nrc_sentiment(text, language = "spanish")
+      all <- cbind(all, sentiment)
+      
+      rss_data(all)
+    }
+  }
+  
+  # Simular búsqueda en Twitter (en una aplicación real usaría la API de Twitter)
+  search_twitter <- function(query) {
+    # Simulación - en producción usaría rtweet o similar
+    data.frame(
+      text = c("Aumentan los homicidios en San Salvador según informe de la PNC #SeguridadSV",
+               "Operativo contra pandillas en La Libertad deja varios arrestos",
+               "Vecinos denuncian extorsiones en Soyapango #ElSalvador"),
+      created_at = Sys.time() - c(100, 500, 1000),
+      user = c("user1", "user2", "user3"),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # Observers
+  observeEvent(input$refresh, { 
+    load_security_feeds()
+    showNotification("Datos de seguridad actualizados", type = "message")
+  })
+  
+  observeEvent(input$search_twitter, {
+    req(input$twitter_query)
+    tweets <- search_twitter(input$twitter_query)
+    if (nrow(tweets) > 0) {
+      # Analizar sentimiento de tweets
+      sentiment <- get_nrc_sentiment(tweets$text, language = "spanish")
+      tweets <- cbind(tweets, sentiment)
+      twitter_data(tweets)
+    }
+  })
+  
+  observeEvent(input$add_feed, {
+    req(input$rss_url, input$source_name)
+    if (!grepl("^https?://", input$rss_url)) {
+      showNotification("URL inválida.", type = "error"); return()
+    }
+    src <- rss_sources()
+    if (input$rss_url %in% src$url) {
+      showNotification("Ya existe.", type = "warning"); return()
+    }
+    new_src <- rbind(src, data.frame(
+      url = input$rss_url, 
+      name = input$source_name, 
+      active = TRUE, 
+      stringsAsFactors = FALSE
+    ))
+    
+    rss_sources(new_src)  # actualiza el reactiveVal
+    write.csv(new_src, rss_file_path, row.names = FALSE)  # guarda el archivo
+    
+    updateTextInput(session, "rss_url", value = "")
+    updateTextInput(session, "source_name", value = "")
+    load_security_feeds()
+    showNotification("Fuente agregada")
+    
+  })
+  
+  observeEvent(input$delete_source, {
+    sel <- input$sources_table_rows_selected
+    req(length(sel) == 1)
+    src <- rss_sources()
+    src <- src[-sel, ]
+    rss_sources(src)
+    load_security_feeds()
+    showNotification("Fuente eliminada")
+    write.csv(src, rss_file_path, row.names = FALSE)
+    
+  })
+  
+  # Cargar datos iniciales después de que la aplicación esté lista
+  observe({
+    load_security_feeds()
+  })
+  
+  # Outputs
+  output$total_incidents <- renderValueBox({
+    df <- rss_data()
+    count <- if (nrow(df) > 0) nrow(df) else 0
+    valueBox(count, "Incidentes Recientes", icon = icon("exclamation-triangle"), color = "red")
+  })
+  
+  output$high_risk_zones <- renderValueBox({
+    df <- rss_data()
+    if (nrow(df) > 0) {
+      top_zone <- names(sort(table(df$location), decreasing = TRUE))[1]
+    } else {
+      top_zone <- "N/A"
+    }
+    valueBox(top_zone, "Zona de Mayor Riesgo", icon = icon("map-marker-alt"), color = "orange")
+  })
+  
+  output$trend_indicator <- renderValueBox({
+    df <- rss_data()
+    if (nrow(df) > 1) {
+      recent <- sum(df$pubDate >= Sys.time() - days(7))
+      older <- sum(df$pubDate >= Sys.time() - days(14) & df$pubDate < Sys.time() - days(7))
+      trend <- if (recent > older) "Aumentando" else if (recent < older) "Disminuyendo" else "Estable"
+      color <- if (recent > older) "red" else if (recent < older) "green" else "yellow"
+    } else {
+      trend <- "N/A"
+      color <- "blue"
+    }
+    valueBox(trend, "Tendencia (últimos 7 días)", icon = icon("chart-line"), color = color)
+  })
+  
+  output$incidents_table <- renderDT({
+    df <- rss_data()
+    req(nrow(df) > 0)
+    df2 <- df[, c("title", "source", "location", "pubDate")]
+    df2$pubDate <- format(df2$pubDate, "%Y-%m-%d %H:%M")
+    datatable(df2, selection = "single", rownames = FALSE,
+              colnames = c("Incidente", "Fuente", "Ubicación", "Fecha"), 
+              options = list(pageLength = 10))
+  })
+  
+  regex_alto <- paste(peligro_alto, collapse = "|")
+  regex_medio <- paste(peligro_medio, collapse = "|")
+  regex_bajo <- paste(peligro_bajo, collapse = "|")
+  
+  output$incident_details <- renderUI({
+    sel <- input$incidents_table_rows_selected
+    req(length(sel) == 1)
+    it <- rss_data()[sel, ]
+    
+    
+    alto_stem <- lemmatize_words(peligro_alto)
+    medio_stem <- lemmatize_words(peligro_medio)
+    bajo_stem <- lemmatize_words(peligro_bajo)
+    
+    
+    
+    # Suponiendo que it$title es una cadena de texto
+    titulo <- tolower(it$title)
+    
+    # risk_level  <- if (grepl(regex_alto, titulo)) {
+    #   "Alto"
+    # } else if (grepl(regex_medio, titulo)) {
+    #   "Medio"
+    # } else if (grepl(regex_bajo, titulo)) {
+    #   "Bajo"
+    # } else {
+    #   "No clasificado"
+    # }
+    # 
+    
+    
+    palabras <- unlist(strsplit(tolower(titulo), "\\s+"))
+    palabras <- palabras[!palabras %in% stopwords("es")]
+    palabras_lemmas <- lemmatize_words(palabras)
+    print(palabras_lemmas)
+    print(alto_stem)
+    
+    # Verificar similitud con cada nivel
+    risk_level  <-  if (any(sapply(palabras_lemmas, function(p) any(RecordLinkage::levenshteinSim(p, alto_stem) >= 0.7)))) {
+       "Alto"
+    } else if (any(sapply(palabras_lemmas, function(p) any(RecordLinkage::levenshteinSim(p, medio_stem) >= 0.7)))) {
+      "Medio"
+    } else if (any(sapply(palabras_lemmas, function(p) any(RecordLinkage::levenshteinSim(p, bajo_stem) >= 0.7)))) {
+      "Bajo"
+    } else {
+      "No clasificado"
+    }
+    # # Determinar nivel de riesgo basado en palabras clave
+    # risk_level <- if (grepl("homicidio|asesinato", tolower(it$title))) "Alto" else
+    #   if (grepl("robo|asalto", tolower(it$title))) "Medio" else "Bajo"
+    
+    tagList(
+      h3(it$title),
+      p(strong("Fuente: "), it$source),
+      p(strong("Ubicación estimada: "), it$location),
+      p(strong("Fecha: "), format(it$pubDate, "%Y-%m-%d %H:%M")),
+      p(strong("Nivel de riesgo: "), span(risk_level, 
+                                          style = if (risk_level == "Alto") "color:red;font-weight:bold" else
+                                            if (risk_level == "Medio") "color:orange" else "color:green")),
+      if (!is.na(it$description)) div(HTML(it$description)),
+      if (!is.na(it$link)) a("Ver noticia completa", href = it$link, 
+                             target = "_blank", class = "btn btn-primary")
+    )
+  })
+  
+  output$security_map <- renderLeaflet({
+    df <- rss_data()
+    req(nrow(df) > 0)
+    
+    # Coordenadas aproximadas de los departamentos de El Salvador
+    dept_coords <- data.frame(
+      location = c("San Salvador", "Santa Ana", "San Miguel", "La Libertad", 
+                   "Sonsonate", "Usulután", "Ahuachapán", "Cabañas", 
+                   "Chalatenango", "Cuscatlán", "La Paz", "La Unión", 
+                   "Morazán", "San Vicente", NA),
+      lat = c(13.6929, 13.9942, 13.4763, 13.4881, 13.7199, 13.3446, 
+              13.9214, 13.8648, 14.0395, 13.7361, 13.4839, 13.3209, 
+              13.7682, 13.6411, NA),
+      lng = c(-89.2182, -89.5599, -88.1775, -89.3226, -89.7249, -88.4326, 
+              -89.8454, -88.6333, -88.9396, -88.9524, -88.9546, -87.8438, 
+              -88.1007, -88.7856, NA)
+    )
+    
+    incidents <- merge(
+      df[(df$location), ],
+      dept_coords,
+      by = "location",
+      all.x = TRUE
+    )
+    
+    req(nrow(incidents) > 0)
+    
+    # Crear el mapa
+    leaflet(incidents) %>%
+      addTiles() %>%
+      addMarkers(
+        lng = ~lng, 
+        lat = ~lat,
+        popup = ~paste("<b>", title, "</b><br>",
+                       "Fuente: ", source, "<br>",
+                       "Fecha: ", format(pubDate, "%Y-%m-%d %H:%M"), "<br>",
+                       "<a href='", link, "' target='_blank'>Ver noticia</a>"),
+        clusterOptions = markerClusterOptions()
+      )
+  })
+  
+  output$security_wordcloud <- renderPlot({
+    df <- rss_data()
+    req(nrow(df) > 0)
+    
+    # Preparar texto específico de seguridad
+    text <- tolower(paste(df$title, df$description))
+    text <- gsub("<[^>]+>", "", text)
+    text <- gsub("[[:punct:]]", "", text)
+    text <- gsub("[[:digit:]]", "", text)
+    
+    # Eliminar stopwords y añadir palabras específicas de seguridad a eliminar
+    custom_stopwords <- c(stopwords("spanish"), "según", "dice", "puede", 
+                          "cada", "tras", "mientras", "aún", "solo")
+    
+    text <- sapply(strsplit(text, " "), function(x) {
+      paste(x[!x %in% custom_stopwords], collapse = " ")
+    })
+    
+    corp <- Corpus(VectorSource(text))
+    m <- as.matrix(TermDocumentMatrix(corp))
+    v <- sort(rowSums(m), decreasing = TRUE)
+    d <- data.frame(word = names(v), freq = v)
+    
+    wordcloud(d$word, d$freq, max.words = input$wordcloud_max, 
+              random.order = FALSE, colors = brewer.pal(8, "Dark2"))
+  })
+  
+  output$department_trends <- renderPlot({
+    df <- rss_data()
+    req(nrow(df) > 0)
+    
+    dept <- input$department
+    print(dept)
+    print( df$location)
+    df_dept <- df[grepl(dept, df$location), ]
+    df_no_dept <- df[!grepl(dept, df$location), ]
+    print(df_no_dept)
+   # print(df_dept)
+    if (nrow(df_dept) > 0) {
+      df_dept$date <- as.Date(df_dept$pubDate)
+      daily_counts <- aggregate(title ~ date, data = df_dept, length)
+      
+      ggplot(daily_counts, aes(x = date, y = title)) +
+        geom_line(color = "steelblue") +
+        geom_point(color = "steelblue") +
+        labs(x = "Fecha", y = "Número de incidentes reportados",
+             title = paste("Tendencia de incidentes en", dept)) +
+        theme_minimal()
+    } else {
+      if((nrow(df_no_dept) > 0)){
+        df_no_dept$date <- as.Date(df_no_dept$pubDate)
+        daily_counts <- aggregate(title ~ date, data = df_no_dept, length)
+        
+        ggplot(daily_counts, aes(x = date, y = title)) +
+          geom_line(color = "steelblue") +
+          geom_point(color = "steelblue") +
+          labs(x = "Fecha", y = "Número de incidentes reportados",
+               title = paste(dept,"No tiene datos, Observa la tendencia de incidentes no definidas en ningun Departamento, elige otro departamento ")) +
+          theme_minimal()
+        
+      }
+      else {
+      ggplot() + 
+        annotate("text", x = 1, y = 1, label = "No hay datos") +
+        theme_void()
+        
+      }
+    }
+  })
+  
+  output$sentiment_plot <- renderPlot({
+    if (input$sentiment_source == "Noticias") {
+      df <- rss_data()
+      req(nrow(df) > 0)
+      sentiment_data <- df[, c("anger", "anticipation", "disgust", "fear", 
+                               "joy", "sadness", "surprise", "trust")]
+    } else {
+      df <- twitter_data()
+      req(nrow(df) > 0)
+      sentiment_data <- df[, c("anger", "anticipation", "disgust", "fear", 
+                               "joy", "sadness", "surprise", "trust")]
+    }
+    
+    totals <- colSums(sentiment_data)
+    d <- data.frame(sent = names(totals), value = totals)
+    
+    ggplot(d, aes(reorder(sent, value), value)) +
+      geom_col(fill = "steelblue") + 
+      coord_flip() +
+      labs(x = "", y = "Conteo de emociones", 
+           title = "Análisis de Emociones") +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  })
+  
+  output$tweets_table <- renderDT({
+    df <- twitter_data()
+    req(nrow(df) > 0)
+    
+    df2 <- df[, c("text", "user", "created_at")]
+    df2$created_at <- format(df2$created_at, "%Y-%m-%d %H:%M")
+    
+    datatable(df2, rownames = FALSE,
+              colnames = c("Tweet", "Usuario", "Fecha"),
+              options = list(pageLength = 5))
+  })
+  
+  output$sources_table <- renderDT({
+    src <- rss_sources()[, c("name", "url", "active")]
+    datatable(src, selection = "single", rownames = FALSE,
+              colnames = c("Nombre", "URL", "Activa"), 
+              options = list(pageLength = 5))
+  })
+  
+  
+  get_web_news_lpg <- function(keywords) {
+    py_run_string("
+      from selenium import webdriver
+      from selenium.webdriver.firefox.options import Options
+      from selenium.webdriver.common.by import By
+      import time
+      
+      options = Options()
+      options.add_argument('--headless')
+      driver = webdriver.Firefox(options=options)
+      driver.get('https://www.laprensagrafica.com/seccion/elsalvador')
+      time.sleep(5)
+      els = driver.find_elements(By.TAG_NAME, 'h2')
+      titulos = [e.text for e in els if e.text.strip() != '']
+      driver.quit()
+      titulos_r = titulos
+        ")
+    
+    titulares?webscrap <- py$titulos_r
+    
+    if (length(titulares) == 0) return(data.frame())
+    
+    pattern <- paste(keywords, collapse = "|")
+    relevantes <- grep(pattern, tolower(titulares), value = TRUE)
+    
+    if (length(relevantes) == 0) {
+      return(data.frame(
+        title = character(0),
+        link = character(0),
+        description = character(0),
+        pubDate = as.POSIXct(character(0)),
+        location = character(0),
+        source = character(0),
+        source_url = character(0),
+        stringsAsFactors = FALSE
+      ))
+    }
+    data.frame(
+      title = relevantes,
+      link = NA,
+      description = NA,
+      pubDate = Sys.time(),
+      location = NA,
+      source = "La Prensa Gráfica (Web)",
+      source_url = "https://www.laprensagrafica.com/seccion/elsalvador",
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+# --- Lanzar aplicación ----
+
+shinyApp(ui, server)
