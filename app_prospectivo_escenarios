@@ -1,0 +1,1541 @@
+"
+***************************************************************************
+  app.R
+---------------------
+ Date                 : Jun 2025
+ Developed for        : UNHCR (United Nations High Commissioner 
+ Copyright            : (C) 2025 by Felipe Carranza
+ Email                : fcarranza@protonmail.com
+
+***************************************************************************
+*                                                                         *
+*   This program is free software; you can redistribute it and/or modify  *
+*   it under the terms of the MIT License *
+*                                                                         *
+*                                                                         *
+***************************************************************************
+
+__author__ = 'Felipe Carranza'
+__date__ = 'Jun 2025'
+__copyright__ = '(C) 2025, Felipe Carranza'
+
+#Las variables y valores se deben utilizar bajo criterio de experto, 
+#las presentadas en este código son de ejemplo
+
+
+
+"                               
+
+#TODO
+# Leer variables y parametros desde fuentes externas de forma dinámica
+# Usuarios
+# Validar MICMAC
+# Optimizar códigos
+
+
+
+
+library(shiny)
+library(shinydashboard)
+library(ggplot2)
+library(plotly)
+library(DT)
+library(triangle)
+library(pls)
+library(chillR)
+library(dendextend)
+#library(bnlearn)
+library(decisionSupport)
+library(dplyr)
+library(visNetwork)
+
+# UI remains the same
+ui <- dashboardPage(
+  dashboardHeader(
+    title = span(
+      tagList(
+        icon("hand-holding-heart"), 
+        "SIEH - Sistema de Impacto Económico-Humanitario",
+        tags$small("v1.0 | Modelo de Asignación Óptima de Recursos")
+      )
+    ),
+    titleWidth = 450
+  ),
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Resumen", tabName = "resumen", icon = icon("tachometer-alt")),
+      menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
+      menuItem("Simulaciones MC", tabName = "mc_sim", icon = icon("random")),
+      menuItem("Escenarios", tabName = "escenarios", icon = icon("project-diagram")),
+      menuItem("Sensibilidad", tabName = "sensibilidad", icon = icon("chart-line")),
+      menuItem("Resultados", tabName = "resultados", icon = icon("table")),
+      menuItem("Distribuciones", tabName = "distribuciones", icon = icon("chart-bar")),
+      menuItem("MICMAC", tabName = "micmac", icon = icon("project-diagram")),
+      menuItem("Red Bayesiana", tabName = "bayesiana", icon = icon("project-diagram"))
+      
+      
+      
+    ),
+    
+    sliderInput("n_sim", "Número de simulaciones:", 
+                min = 1000, max = 10000, value = 5000, step = 1000),
+    
+    actionButton("run_sim", "Ejecutar Simulaciones", icon = icon("play"),
+                 style = "color: #fff; background-color: #337ab7; border-color: #2e6da4")
+  ),
+  
+  dashboardBody(
+    tabItems(
+      # Panel de resumen ejecutivo
+      tabItem(tabName = "resumen",
+              dashboardHeader(
+                title = span(
+                  tagList(
+                    icon("hand-holding-heart"), 
+                    "SIEH - Sistema de Impacto Económico-Humanitario",
+                    tags$small("v1.0 | Modelo de Asignación Óptima de Recursos")
+                  )
+                ),
+                titleWidth = 450
+              ),
+              fluidRow(
+                box(plotlyOutput("resumenImpactoPlot"), width = 6),
+                box(plotlyOutput("resumenRiesgoPlot"), width = 6)
+              ), 
+              fluidRow(
+                box(
+                  title = "Bienvenido al SIEH", 
+                  status = "primary", 
+                  solidHeader = TRUE,
+                  width = 12,
+                  div(
+                    style = "text-align: center;",
+                    h2("Sistema de Simulación de Impacto Económico-Humanitario"),
+                    tags$hr(),
+                    fluidRow(
+                      column(
+                        width = 6,
+                        h3(icon("random"), "Modelo Monte Carlo"),
+                        p("Simulación probabilística que evalúa:"),
+                        tags$ul(
+                          tags$li("Relación inversión-beneficio para IDPs"),
+                          tags$li("Escenarios optimistas/pesimistas"),
+                          tags$li("Distribuciones de riesgo")
+                        ),
+                        br(),
+                        h4(icon("chart-line"), "Métrica Clave:"),
+                        p("Impacto Total = (Beneficios ACNUR + Gobierno) - Costos Totales"),
+                        div(
+                          style = "background-color: #f8f9fa; padding: 10px; border-radius: 5px;",
+                          "Mayor inversión → Mayor beneficio | Menor inversión → Menor beneficio"
+                        )
+                      ),
+                      column(
+                        width = 6,
+                        h3(icon("search-dollar"), "Variables Críticas"),
+                        plotlyOutput("portadaRadar", height = "300px"),
+                        p("Análisis PLS identifica los drivers de impacto:")
+                      )
+                    )
+                  )
+                )
+              )
+      ),
+      
+      # Panel principal del dashboard
+      tabItem(tabName = "dashboard",
+              fluidRow(
+                valueBoxOutput("impactoTotalBox", width = 4),
+                valueBoxOutput("impactoNoHumBox", width = 4),
+                valueBoxOutput("riesgoHumanitarioBox", width = 4)
+              ),
+              fluidRow(
+                box(plotlyOutput("histImpactoTotal"), width = 6,
+                    title = "Distribución Impacto Total", status = "primary"),
+                box(plotlyOutput("probCrisis"), width = 6,
+                    title = "Probabilidad de Crisis", status = "danger")
+              ),
+              fluidRow(
+                box(plotlyOutput("histBeneficioAcnur"), width = 6,
+                    title = "Beneficio ACNUR", status = "warning"),
+                box(plotlyOutput("histCostosGob"), width = 6,
+                    title = "Costos", status = "success")
+              )
+      ),
+      
+      # Panel de simulaciones Monte Carlo
+      tabItem(tabName = "mc_sim",
+              h2("Resultados Simulación Monte Carlo"),
+              fluidRow(
+                box(plotlyOutput("mcDensidad"), width = 12,
+                    title = "Distribución de Resultados", status = "info")
+              ),
+              fluidRow(
+                box(plotlyOutput("mcCorrelacion"), width = 6,
+                    title = "Correlación con Impacto Total", status = "info"),
+                box(plotlyOutput("mcHeatmap"), width = 6,
+                    title = "Mapa de Calor de Correlaciones", status = "info")
+              )
+      ),
+      
+      # Panel de análisis de escenarios
+      tabItem(tabName = "escenarios",
+              h2("Análisis de Escenarios"),
+              fluidRow(
+                box(plotlyOutput("escenarioPlot"), width = 12,
+                    title = "Comparación de Escenarios", status = "primary")
+              ),
+              fluidRow(
+                box(plotlyOutput("deltaPlot"), width = 12,
+                    title = "Deltas vs Escenario Pesimista", status = "info")
+              ),
+              fluidRow(
+                box(DTOutput("escenarioTable"), width = 12,
+                    title = "Tabla Comparativa", status = "success")
+              )
+      ),
+      
+      # Panel de análisis de sensibilidad
+      tabItem(tabName = "sensibilidad",
+              h2("Análisis de Sensibilidad por Escenario"),
+              fluidRow(
+                box(plotlyOutput("plsImpactoTotal"), width = 12,
+                    title = "Sensibilidad - Impacto Total", status = "primary")
+              ),
+              fluidRow(
+                box(plotlyOutput("plsImpactoNoHum"), width = 12,
+                    title = "Sensibilidad - Impacto No Humanitario", status = "warning")
+              ),
+              fluidRow(
+                box(plotlyOutput("plsRiesgoHum"), width = 12,
+                    title = "Sensibilidad - Riesgo Humanitario", status = "danger")
+              )
+      ),
+      
+      # Panel de resultados detallados
+      tabItem(tabName = "resultados",
+              h2("Resultados Detallados"),
+              DTOutput("resultadosTable"),
+              h3("Resumen Estadístico"),
+              DTOutput("resumenTable")
+      ),
+      
+      # Panel de distribuciones de inputs
+      tabItem(tabName = "distribuciones",
+              h2("Distribuciones de Inputs"),
+              fluidRow(
+                box(plotlyOutput("distGastosSalud"), width = 4,
+                    title = "Gastos Salud General"),
+                box(plotlyOutput("distEndeudamiento"), width = 4,
+                    title = "Endeudamiento Préstamos"),
+                box(plotlyOutput("distCanastaBasica"), width = 4,
+                    title = "Aumento Canasta Básica")
+              ),
+              fluidRow(
+                box(plotlyOutput("distUsoCUBOS"), width = 4,
+                    title = "Uso de CUBOS"),
+                box(plotlyOutput("distBeneficioPCT"), width = 4,
+                    title = "Beneficio PCT"),
+                box(plotlyOutput("distFalsoPositivo"), width = 4,
+                    title = "Falso Positivo PCT")
+              )
+      ),
+      tabItem(tabName = "micmac",
+              tabsetPanel(
+                tabPanel("Escenario Pesimista", 
+                         plotlyOutput("micmacPesimista"),
+                         #visNetworkOutput("redBayesianaPesimista", height = "800px"),
+                         DTOutput("tablaPesimista"), 
+                         box(title = "Dendrograma de Dependencia", width = 12,
+                             plotOutput("dendroDepPesimista", height = "600px")),
+                         box(title = "Dendrograma de Influencia", width = 12,
+                             plotOutput("dendroInfPesimista", height = "600px"))),
+                tabPanel("Escenario Continuista", 
+                         plotlyOutput("micmacContinuista"),
+                         #visNetworkOutput("redBayesianaContinuista", height = "800px"),
+                         DTOutput("tablaContinuista")),
+                tabPanel("Escenario Optimista", 
+                         plotlyOutput("micmacOptimista"),
+                         #visNetworkOutput("redBayesianaOptimista", height = "800px"),
+                         DTOutput("tablaOptimista"))
+              )
+      )
+      # tabItem(tabName = "bayesiana",
+      #         fluidRow(
+      #           box(title = "Red Bayesiana", width = 12, height = 22,
+      #               visNetworkOutput("redBayesianaPlot", width = "100%", height = "800px")
+      #           )
+      #         )
+      # )
+      
+      
+      
+      
+    )
+  )
+)
+
+# Server con las modificaciones para compatibilidad
+server <- function(input, output) {
+  
+  output$portadaRadar <- renderPlotly({
+    # Obtener datos PLS reales
+    pls_data <- pls_result()
+    
+    if(is.null(pls_data)) {
+      return(plotly_empty() |> 
+               layout(title = "Ejecute simulaciones primero para ver resultados PLS"))
+    }
+    
+    # Normalizar los valores VIP (0-1) para mejor visualización
+    pls_data$VIP_normalized <- (pls_data$VIP - min(pls_data$VIP)) / 
+      (max(pls_data$VIP) - min(pls_data$VIP))
+    
+    # Crear el radar plot
+    plot_ly(
+      type = 'scatterpolar',
+      r = pls_data$VIP_normalized,
+      theta = pls_data$Variable,
+      fill = 'toself',
+      mode = 'lines+markers',
+      line = list(color = '#1f77b4', width = 2),
+      marker = list(
+        size = 8,
+        color = ifelse(pls_data$Coef > 0, '#2ca02c', '#d62728'), # Verde/POS, Rojo/NEG
+        symbol = ifelse(pls_data$Coef > 0, 'circle', 'x')
+      ),
+      hoverinfo = 'text',
+      text = ~paste(
+        "Variable:", pls_data$Variable,
+        "<br>Importancia (VIP):", round(pls_data$VIP, 2),
+        "<br>Coeficiente:", round(pls_data$Coef, 3),
+        "<br>Efecto:", ifelse(pls_data$Coef > 0, "Positivo", "Negativo")
+      )
+    ) |>
+      layout(
+        title = "Importancia Relativa de Variables (VIP Normalizado)",
+        polar = list(
+          radialaxis = list(
+            visible = TRUE,
+            range = c(0, 1),
+            tickvals = seq(0, 1, 0.2),
+            ticktext = paste0(seq(0, 100, 20), "%")
+          )
+        ),
+        showlegend = FALSE,
+        margin = list(l = 50, r = 50, b = 50, t = 50)
+      )
+  })
+  
+  # ValueBoxes para portada
+  output$portadaImpactoBox <- renderValueBox({
+    valueBox(
+      "Impacto Total", 
+      "Variable principal del modelo",
+      icon = icon("bullseye"),
+      color = "navy"
+    )
+  })
+  
+  input_table <- data.frame(
+    variable = c(
+      "gastos_salud_general", "endeudamiento_prestamos", "aumento_canasta_basica", 
+      "uso_CUBOS", "beneficio_PCT", "falso_positivo_PCT", "apoyo_CBI", 
+      "Osmosys_salud_asistencia", "Osmosys_medios_de_vida", "gastos_salud_violencia_genero",
+      "Osmosys_genero", "Osmosys_comunitaria", "violencia_comunitaria"
+    ),
+    distribution = rep("triang", 13),
+    lower = c(0.2, 0.4, 0.12, 0.2, 0.4, 0.3, 0.01, 0.1, 0.1, 0.2, 0.01, 0.1, 0.2),
+    median = c(0.5, 0.5, 0.5, 0.4, 0.5, 0.4, 0.5, 0.5, 0.5, 0.5, 0.1, 0.5, 0.5),
+    upper = c(0.8, 0.8, 0.6, 0.6, 0.9, 0.5, 0.75, 0.75, 0.75, 0.8, 0.2, 0.75, 0.8),
+    stringsAsFactors = FALSE
+  )
+  
+  model_function <- function(...) {
+    args <- list(...)
+    
+    # Conversión a montos monetarios
+    salud_dinero <- args$gastos_salud_general * 90000 * 200
+    endeudamiento_prestamos_dinero <- args$endeudamiento_prestamos * 90000 * 600
+    aumento_canasta_basica_dinero <- args$aumento_canasta_basica * 90000 * 300
+    uso_CUBOS_dinero <- args$uso_CUBOS * 60000 * 25
+    beneficio_PCT_dinero <- args$beneficio_PCT * 90000 * 3600 * 0.45
+    falso_positivo_PCT_dinero <- args$falso_positivo_PCT * 9000 * 2400
+    apoyo_CBI_dinero <- args$apoyo_CBI * 2639 * 12
+    Osmosys_salud_asistencia_dinero <- args$Osmosys_salud_asistencia * 4443 * 95.7
+    Osmosys_medios_de_vida_dinero <- args$Osmosys_medios_de_vida * 605 * 179.3
+    gastos_salud_violencia_genero_dinero <- args$gastos_salud_violencia_genero * 7200 * 4500
+    Osmosys_genero_dinero <- args$Osmosys_genero * 633 * 38.2
+    Osmosys_comunitaria_dinero <- args$Osmosys_comunitaria * 301 * 10.52
+    violencia_comunitaria_dinero <- args$violencia_comunitaria * 2090 * 90000
+    
+    # Cálculo de beneficios
+    Beneficio_salud <- (Osmosys_salud_asistencia_dinero * 200) - Osmosys_salud_asistencia_dinero
+    Beneficio_endeudamiento <- ((Osmosys_medios_de_vida_dinero + apoyo_CBI_dinero) * 600) - (Osmosys_medios_de_vida_dinero + apoyo_CBI_dinero)
+    Beneficio_genero_dinero <- (Osmosys_genero_dinero * 7200) - Osmosys_genero_dinero
+    Beneficio_comunitaria <- (Osmosys_comunitaria_dinero * 2090) - Osmosys_comunitaria_dinero
+    
+    # Resultados finales
+    Beneficio_Acnur <- Beneficio_salud + Beneficio_endeudamiento + Beneficio_genero_dinero + Beneficio_comunitaria 
+    Beneficio_Impacto_Gob <- uso_CUBOS_dinero + beneficio_PCT_dinero
+    Costos_Impacto_Gob <- salud_dinero + endeudamiento_prestamos_dinero + falso_positivo_PCT_dinero +
+      violencia_comunitaria_dinero + aumento_canasta_basica_dinero
+    
+    impacto_total <- Beneficio_Acnur + Beneficio_Impacto_Gob - Costos_Impacto_Gob
+    impacto_total_nohumanitario <- Beneficio_Impacto_Gob - Costos_Impacto_Gob
+    
+    return(data.frame(
+      impacto_total = impacto_total,
+      impacto_total_nohumanitario = impacto_total_nohumanitario,
+      Beneficio_Acnur = Beneficio_Acnur,
+      Beneficio_Impacto_Gob = Beneficio_Impacto_Gob,
+      Costos_Impacto_Gob = Costos_Impacto_Gob,
+      crisis_derechos_humanos = ifelse(args$falso_positivo_PCT > 0.1, 1, 0),
+      resiliencia_comunitaria = ifelse(args$uso_CUBOS > 0.5 & args$Osmosys_comunitaria > 0.5, 1, 0)
+    ))
+  }
+  
+  simulaciones <- eventReactive(input$run_sim, {
+    n <- input$n_sim
+    p <- input_table
+    
+    # Generar distribuciones triangulares
+    inputs_sim <- sapply(1:nrow(p), function(i) {
+      rtriangle(n, a = p$lower[i], b = p$upper[i], c = p$median[i])
+    })
+    
+    colnames(inputs_sim) <- p$variable
+    inputs_sim <- as.data.frame(inputs_sim)
+    
+    # Aplicar la función del modelo
+    resultados <- do.call(model_function, inputs_sim)
+    
+    # Crear objeto combinado (para compatibilidad)
+    sims_combinado <- cbind(sim_id = 1:n, inputs_sim, resultados)
+    
+    # Crear objeto mcSimulation (para PLS)
+    mc_result <- list(
+      y = resultados,
+      x = inputs_sim,
+      call = match.call()
+    )
+    class(mc_result) <- c("mcSimulation", "list")
+    
+    # Devolver ambos objetos
+    list(
+      combinado = sims_combinado,
+      mc = mc_result
+    )
+  })
+  
+  # Función para análisis PLS actualizada
+  run_pls_analysis <- function(data, outcome_var) {
+    # Verificación robusta de los datos de entrada
+    if(!inherits(data, "mcSimulation") || is.null(data$x) || is.null(data$y)) {
+      return(create_default_result(data))
+    }
+    
+    X <- as.data.frame(data$x)
+    Y <- data$y[[outcome_var]]
+    
+    # Validación de datos
+    if(nrow(X) == 0 || length(Y) == 0 || nrow(X) != length(Y)) {
+      warning("Datos incompatibles para PLS: X e Y tienen diferentes longitudes")
+      return(create_default_result(data))
+    }
+    
+    # Ejecutar PLS con método de puntuaciones ortogonales
+    pls_model <- tryCatch({
+      # Usamos method = "oscorespls" como requiere VIP()
+      pls_model <- plsr(Y ~ ., data = X, ncomp = min(2, ncol(X)), 
+                        validation = "CV", method = "oscorespls")
+      
+      # Verificación de resultados
+      if(length(coef(pls_model)) == 0) {
+        stop("El modelo no generó coeficientes")
+      }
+      pls_model
+    }, error = function(e) {
+      message("Error en PLS: ", e$message)
+      NULL
+    })
+    
+    if(is.null(pls_model)) {
+      return(create_default_result(data))
+    }
+    
+    # Obtener VIP scores con manejo robusto
+    vip_scores <- tryCatch({
+      vip <- chillR::VIP(pls_model)
+      if(ncol(vip) >= 1) vip[,1] else rep(NA, ncol(X))
+    }, error = function(e) {
+      message("Error calculando VIP: ", e$message)
+      rep(NA, ncol(X))
+    })
+    
+    # Obtener coeficientes con manejo robusto
+    coef_values <- tryCatch({
+      coefs <- coef(pls_model, ncomp = min(2, ncol(X)))
+      if(length(dim(coefs)) == 3) {
+        as.numeric(coefs[,,min(2, dim(coefs)[3])])
+      } else if(length(coefs) == ncol(X)) {
+        as.numeric(coefs)
+      } else {
+        rep(NA, ncol(X))
+      }
+    }, error = function(e) {
+      message("Error obteniendo coeficientes: ", e$message)
+      rep(NA, ncol(X))
+    })
+    
+    # Crear dataframe de resultados
+    result <- data.frame(
+      Variable = colnames(X),
+      VIP = vip_scores,
+      Coef = coef_values,
+      stringsAsFactors = FALSE
+    )
+    
+    # Verificación final
+    if(nrow(result) != ncol(X)) {
+      warning("El resultado no coincide con el número de variables")
+      return(create_default_result(data))
+    }
+    
+    result
+  }
+  
+  # Función auxiliar para crear resultados por defecto
+  create_default_result <- function(data) {
+    if(!is.null(data$x)) {
+      vars <- colnames(data$x)
+    } else {
+      vars <- input_table$variable
+    }
+    
+    data.frame(
+      Variable = vars,
+      VIP = rep(NA, length(vars)),
+      Coef = rep(NA, length(vars)),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # Función auxiliar para crear resultados por defecto
+  create_default_result <- function(data) {
+    if(!is.null(data$x)) {
+      vars <- colnames(data$x)
+    } else {
+      vars <- input_table$variable
+    }
+    
+    data.frame(
+      Variable = vars,
+      VIP = rep(NA, length(vars)),
+      Coef = rep(NA, length(vars)),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  escenarios <- reactive({
+    sims <- simulaciones()$combinado
+    
+    quantiles_rh <- quantile(sims$Beneficio_Acnur, probs = c(0.1, 0.5, 0.9))
+    
+    escenario_pesimista <- sims[sims$Beneficio_Acnur <= quantiles_rh[1], ]
+    escenario_continuista <- sims[sims$Beneficio_Acnur > quantiles_rh[1] & 
+                                    sims$Beneficio_Acnur <= quantiles_rh[2], ]
+    escenario_optimista <- sims[sims$Beneficio_Acnur > quantiles_rh[3], ]
+    
+    # Calcular deltas
+    inversion_pesimista <- mean(escenario_pesimista$Beneficio_Acnur)
+    impacto_pesimista <- mean(escenario_pesimista$impacto_total)
+    
+    tabla_escenarios <- data.frame(
+      Escenario = c("Pesimista", "Continuista", "Optimista"),
+      Inversion_Promedio = c(
+        inversion_pesimista,
+        mean(escenario_continuista$Beneficio_Acnur),
+        mean(escenario_optimista$Beneficio_Acnur)
+      ),
+      Impacto_Promedio = c(
+        impacto_pesimista,
+        mean(escenario_continuista$impacto_total),
+        mean(escenario_optimista$impacto_total)
+      ),
+      Prob_Crisis = c(
+        mean(escenario_pesimista$crisis_derechos_humanos),
+        mean(escenario_continuista$crisis_derechos_humanos),
+        mean(escenario_optimista$crisis_derechos_humanos)
+      ),
+      Prob_Resiliencia = c(
+        mean(escenario_pesimista$resiliencia_comunitaria),
+        mean(escenario_continuista$resiliencia_comunitaria),
+        mean(escenario_optimista$resiliencia_comunitaria)
+      )
+    )
+    
+    # Añadir deltas
+    tabla_escenarios$Delta_Inversion_vs_Pesimista <- c(
+      (tabla_escenarios$Inversion_Promedio[1] - tabla_escenarios$Inversion_Promedio[2]) / tabla_escenarios$Inversion_Promedio[2] * 100,
+      0,
+      (tabla_escenarios$Inversion_Promedio[3] - tabla_escenarios$Inversion_Promedio[2]) / tabla_escenarios$Inversion_Promedio[2] * 100
+    )
+    
+    tabla_escenarios$Delta_Impacto_vs_Pesimista <- c(
+      (tabla_escenarios$Impacto_Promedio[1] - tabla_escenarios$Impacto_Promedio[2]) / abs(tabla_escenarios$Impacto_Promedio[2]) * 100,
+      0,
+      (tabla_escenarios$Impacto_Promedio[3] - tabla_escenarios$Impacto_Promedio[2]) / abs(tabla_escenarios$Impacto_Promedio[2]) * 100
+    )
+    
+    tabla_escenarios
+  })
+  
+  # Análisis PLS por escenario
+  pls_result <- reactive({
+    sims <- simulaciones()$mc
+    
+    # Skip if no simulation results yet
+    if(is.null(sims)) return(NULL)
+    
+    tryCatch({
+      
+      
+      # Combine x and y variables
+      
+      
+      plsr_resultados <- plsr.mcSimulation(object = sims, resultName = "impacto_total")
+      
+      # Get VIP scores
+      vip_scores <- chillR::VIP(plsr_resultados)[1,]
+      
+      # Get coefficients
+      coef_values <- as.numeric(coef(plsr_resultados))
+      
+      print(vip_scores)
+      
+      # Create result data frame
+      data.frame(
+        Variable = names(sims$x),
+        VIP = vip_scores,
+        Coef = coef_values,
+        stringsAsFactors = FALSE
+      )
+    }, error = function(e) {
+      message("Error in PLS analysis: ", e$message)
+      return(NULL)
+    })
+  })
+  
+  
+  
+  # PLS Plots with VIP and coefficient sign
+  output$plsImpactoTotal <- renderPlotly({
+    pls_data <- pls_result()
+    
+    if(is.null(pls_data)) {
+      return(plotly_empty() |> 
+               layout(title = "Ejecute simulaciones primero para ver resultados PLS"))
+    }
+    
+    # Add sign information
+    pls_data$Signo <- ifelse(pls_data$Coef > 0, "Positivo", "Negativo")
+    
+    # Create plot
+    plot_ly(pls_data, x = ~reorder(Variable, -VIP), y = ~VIP, 
+            color = ~Signo, type = "bar",
+            colors = c("Negativo" = "#d62728", "Positivo" = "#2ca02c"),
+            hoverinfo = "text",
+            text = ~paste("Variable:", Variable,
+                          "<br>VIP:", round(VIP, 2),
+                          "<br>Coef:", format(Coef, scientific = TRUE, digits = 2))) |>
+      layout(title = "Sensibilidad - Impacto Total",
+             xaxis = list(title = "Variable"),
+             yaxis = list(title = "Importancia (VIP)"),
+             legend = list(title = list(text = "Signo Coef")))
+  })
+  
+  
+  pls_result_noimpact <- reactive({
+    sims <- simulaciones()$mc
+    
+    # Skip if no simulation results yet
+    if(is.null(sims)) return(NULL)
+    
+    tryCatch({
+      
+      
+      # Combine x and y variables
+      
+      
+      plsr_resultados <- plsr.mcSimulation(object = sims, resultName = "impacto_total_nohumanitario")
+      
+      # Get VIP scores
+      vip_scores <- chillR::VIP(plsr_resultados)[1,]
+      
+      # Get coefficients
+      coef_values <- as.numeric(coef(plsr_resultados))
+      
+      print(vip_scores)
+      
+      # Create result data frame
+      data.frame(
+        Variable = names(sims$x),
+        VIP = vip_scores,
+        Coef = coef_values,
+        stringsAsFactors = FALSE
+      )
+    }, error = function(e) {
+      message("Error in PLS analysis: ", e$message)
+      return(NULL)
+    })
+  })
+  
+  
+  # Remove the other PLS outputs or keep them empty
+  output$plsImpactoNoHum <- renderPlotly({
+    
+    
+    
+    pls_data <- pls_result_noimpact()
+    
+    if(is.null(pls_data)) {
+      return(plotly_empty() |> 
+               layout(title = "Ejecute simulaciones primero para ver resultados PLS"))
+    }
+    
+    # Add sign information
+    pls_data$Signo <- ifelse(pls_data$Coef > 0, "Positivo", "Negativo")
+    
+    # Create plot
+    plot_ly(pls_data, x = ~reorder(Variable, -VIP), y = ~VIP, 
+            color = ~Signo, type = "bar",
+            colors = c("Negativo" = "#d62728", "Positivo" = "#2ca02c"),
+            hoverinfo = "text",
+            text = ~paste("Variable:", Variable,
+                          "<br>VIP:", round(VIP, 2),
+                          "<br>Coef:", format(Coef, scientific = TRUE, digits = 2))) |>
+      layout(title = "Sensibilidad - Impacto Total sin ayuda humanitaria",
+             xaxis = list(title = "Variable"),
+             yaxis = list(title = "Importancia (VIP)"),
+             legend = list(title = list(text = "Signo Coef")))
+  })
+  
+  output$plsRiesgoHum <- renderPlotly({
+    plotly_empty() |> 
+      layout(title = "Análisis no implementado - enfocado en impacto_total")
+  })
+  
+  # Resumen ejecutivo
+  output$resumenEjecutivo <- renderUI({
+    sims <- simulaciones()$combinado
+    
+    impacto_total <- mean(sims$impacto_total)/1e6
+    beneficio_acnur <- mean(sims$Beneficio_Acnur)/1e6
+    prob_crisis <- mean(sims$crisis_derechos_humanos)*100
+    
+    HTML(paste0(
+      "<h3>Resumen de Impacto</h3>",
+      "<p><strong>Impacto Total Promedio:</strong> $", round(impacto_total, 1), " millones USD</p>",
+      "<p><strong>Beneficio Promedio ACNUR:</strong> $", round(beneficio_acnur, 1), " millones USD</p>",
+      "<p><strong>Probabilidad de Crisis DDHH:</strong> ", round(prob_crisis, 1), "%</p>",
+      "<hr>",
+      "<h3>Recomendaciones Clave</h3>",
+      "<ul>",
+      "<li>Focalizar inversión en variables con mayor impacto según análisis de sensibilidad</li>",
+      "<li>Monitorear indicadores de riesgo humanitario</li>",
+      "<li>Considerar escenarios alternativos para planificación estratégica</li>",
+      "</ul>"
+    ))
+  })
+  
+  # Gráficos del resumen
+  output$resumenImpactoPlot <- renderPlotly({
+    sims <- simulaciones()$combinado
+    
+    data <- data.frame(
+      Metric = c("Impacto Total", "Beneficio ACNUR", "Costos"),
+      Value = c(
+        mean(sims$impacto_total)/1e6,
+        mean(sims$Beneficio_Acnur)/1e6,
+        mean(sims$Costos_Impacto_Gob)/1e6
+      )
+    )
+    
+    plot_ly(data, x = ~Metric, y = ~Value, type = "bar",
+            marker = list(color = c("#1f77b4", "#ff7f0e", "#d62728"))) |>
+      layout(title = "Impactos Promedio (millones USD)",
+             yaxis = list(title = "Millones USD"),
+             xaxis = list(title = ""))
+  })
+  
+  output$resumenRiesgoPlot <- renderPlotly({
+    sims <- simulaciones()$combinado
+    
+    data <- data.frame(
+      Metric = c("Prob. Crisis DDHH", "Prob. Resiliencia"),
+      Value = c(
+        mean(sims$crisis_derechos_humanos)*100,
+        mean(sims$resiliencia_comunitaria)*100
+      )
+    )
+    
+    plot_ly(data, x = ~Metric, y = ~Value, type = "bar",
+            marker = list(color = c("#e377c2", "#7f7f7f"))) |>
+      layout(title = "Probabilidades de Riesgo (%)",
+             yaxis = list(title = "Porcentaje", range = c(0, 100)),
+             xaxis = list(title = ""))
+  })
+  
+  # Value Boxes
+  output$impactoTotalBox <- renderValueBox({
+    sims <- simulaciones()$combinado
+    valor <- mean(sims$impacto_total)/1e6
+    valueBox(
+      paste0("$", format(round(valor, 1), nsmall = 1), "M"), 
+      "Impacto Total (USD)", 
+      icon = icon("globe"),
+      color = ifelse(valor > 0, "green", "red")
+    )
+  })
+  
+  output$impactoNoHumBox <- renderValueBox({
+    sims <- simulaciones()$combinado
+    valor <- mean(sims$impacto_total_nohumanitario)/1e6
+    valueBox(
+      paste0("$", format(round(valor, 1), nsmall = 1), "M"), 
+      "Impacto No Humanitario", 
+      icon = icon("chart-line"),
+      color = ifelse(valor > 0, "green", "red")
+    )
+  })
+  
+  output$riesgoHumanitarioBox <- renderValueBox({
+    sims <- simulaciones()$combinado
+    valor <- mean(sims$Beneficio_Acnur)/1e6
+    valueBox(
+      paste0("$", format(round(valor, 1), nsmall = 1), "M"), 
+      "Beneficio ACNUR", 
+      icon = icon("hand-holding-heart"),
+      color = "orange"
+    )
+  })
+  
+  # Gráficos del dashboard
+  output$histImpactoTotal <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$impacto_total/1e6, type = "histogram", 
+            nbinsx = 30, marker = list(color = "#1f77b4"),
+            hoverinfo = "x+y") |>
+      layout(title = "Distribución Impacto Total (millones USD)",
+             xaxis = list(title = "Impacto Total (millones USD)"),
+             yaxis = list(title = "Frecuencia"))
+  })
+  
+  output$histBeneficioAcnur <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$Beneficio_Acnur/1e6, type = "histogram",
+            marker = list(color = "#ff7f0e"),
+            hoverinfo = "x+y") |>
+      layout(title = "Distribución Beneficio ACNUR (millones USD)",
+             xaxis = list(title = "Beneficio ACNUR (millones USD)"))
+  })
+  
+  output$histCostosGob <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$Costos_Impacto_Gob/1e6, type = "histogram",
+            marker = list(color = "#d62728"),
+            hoverinfo = "x+y") |>
+      layout(title = "Distribución Costos (millones USD)",
+             xaxis = list(title = "Costos (millones USD)"))
+  })
+  
+  output$probCrisis <- renderPlotly({
+    sims <- simulaciones()$combinado
+    prob <- mean(sims$crisis_derechos_humanos)
+    plot_ly(x = "Crisis DDHH", y = prob, type = "bar",
+            marker = list(color = ifelse(prob > 0.5, "red", "green")),
+            text = paste("Probabilidad:", round(prob*100, 1), "%"),
+            hoverinfo = "text") |>
+      layout(title = paste("Probabilidad:", round(prob*100, 1), "%"),
+             yaxis = list(title = "Probabilidad", range = c(0, 1)))
+  })
+  
+  # Gráficos de simulaciones Monte Carlo
+  output$mcDensidad <- renderPlotly({
+    sims <- simulaciones()$combinado
+    
+    plot_ly(alpha = 0.6) |>
+      add_trace(x = ~sims$impacto_total/1e6, type = "histogram", 
+                name = "Impacto Total", marker = list(color = "#1f77b4")) |>
+      add_trace(x = ~sims$Beneficio_Acnur/1e6, type = "histogram",
+                name = "Beneficio ACNUR", marker = list(color = "#ff7f0e")) |>
+      add_trace(x = ~ -1*(sims$Costos_Impacto_Gob)/1e6, type = "histogram",
+                name = "Costos", marker = list(color = "#d62728")) |>
+      layout(title = "Distribución de Resultados (millones USD)",
+             barmode = "overlay",
+             xaxis = list(title = "Millones USD"),
+             yaxis = list(title = "Densidad"))
+  })
+  
+  output$mcCorrelacion <- renderPlotly({
+    sims <- simulaciones()$combinado
+    
+    vars <- c("gastos_salud_general", "endeudamiento_prestamos", "uso_CUBOS",
+              "beneficio_PCT", "falso_positivo_PCT", "Osmosys_comunitaria")
+    
+    corrs <- sapply(vars, function(v) cor(sims[[v]], sims$impacto_total))
+    
+    data <- data.frame(
+      Variable = gsub("_", " ", vars),
+      Correlacion = corrs
+    )
+    
+    plot_ly(data, x = ~reorder(Variable, Correlacion), y = ~Correlacion, type = "bar",
+            marker = list(color = ~Correlacion,
+                          colorscale = list(c(-1, 0, 1), list("red", "white", "blue"))),
+            text = ~paste(Variable, ":", round(Correlacion, 2)),
+            hoverinfo = "text") |>
+      layout(title = "Correlación con Impacto Total",
+             xaxis = list(title = ""),
+             yaxis = list(title = "Coeficiente de Correlación", range = c(-1, 1)))
+  })
+  
+  # Mapa de calor de correlaciones
+  output$mcHeatmap <- renderPlotly({
+    sims <- simulaciones()$combinado
+    
+    vars <- c("gastos_salud_general", "endeudamiento_prestamos", "uso_CUBOS",
+              "beneficio_PCT", "falso_positivo_PCT", "Osmosys_comunitaria",
+              "impacto_total", "Beneficio_Acnur", "Costos_Impacto_Gob")
+    
+    cor_matrix <- cor(sims[, vars])
+    
+    plot_ly(x = gsub("_", " ", colnames(cor_matrix)), 
+            y = gsub("_", " ", rownames(cor_matrix)), 
+            z = cor_matrix, 
+            type = "heatmap",
+            colorscale = "RdBu",
+            zmin = -1, zmax = 1) |>
+      layout(title = "Matriz de Correlación",
+             xaxis = list(title = ""),
+             yaxis = list(title = ""))
+  })
+  
+  # Gráficos de escenarios
+  output$escenarioPlot <- renderPlotly({
+    esc <- escenarios()
+    
+    plot_ly(esc, x = ~Escenario, y = ~Impacto_Promedio/1e6, type = "bar",
+            name = "Impacto Promedio", marker = list(color = "#1f77b4"),
+            text = ~paste("$", round(Impacto_Promedio/1e6, 1), "M"),
+            hoverinfo = "text") |>
+      add_trace(y = ~Inversion_Promedio/1e6, name = "Inversión Promedio", 
+                marker = list(color = "#ff7f0e"),
+                text = ~paste("$", round(Inversion_Promedio/1e6, 1), "M"),
+                hoverinfo = "text") |>
+      layout(title = "Comparación de Escenarios (millones USD)",
+             yaxis = list(title = "Millones USD"),
+             barmode = "group")
+  })
+  
+  output$deltaPlot <- renderPlotly({
+    esc <- escenarios()
+    
+    plot_ly(esc, x = ~Escenario) |>
+      add_trace(y = ~Delta_Inversion_vs_Pesimista, name = "Δ Inversión vs Pesimista", 
+                type = "bar", marker = list(color = "#9467bd"),
+                text = ~paste(round(Delta_Inversion_vs_Pesimista, 1), "%"),
+                hoverinfo = "text") |>
+      add_trace(y = ~Delta_Impacto_vs_Pesimista, name = "Δ Impacto vs Pesimista", 
+                type = "bar", marker = list(color = "#8c564b"),
+                text = ~paste(round(Delta_Impacto_vs_Pesimista, 1), "%"),
+                hoverinfo = "text") |>
+      layout(title = "Deltas vs Escenario Pesimista (%)",
+             yaxis = list(title = "Porcentaje"),
+             barmode = "group")
+  })
+  
+  # Tablas de resultados
+  output$escenarioTable <- renderDT({
+    esc <- escenarios()
+    datatable(esc, options = list(pageLength = 3)) |>
+      formatCurrency(columns = c("Inversion_Promedio", "Impacto_Promedio"), 
+                     currency = "$", digits = 0) |>
+      formatPercentage(columns = c("Prob_Crisis", "Prob_Resiliencia", 
+                                   "Delta_Inversion_vs_Pesimista", 
+                                   "Delta_Impacto_vs_Pesimista"), 
+                       digits = 1)
+  })
+  
+  output$resultadosTable <- renderDT({
+    sims <- simulaciones()$combinado
+    cols <- c("impacto_total", "impacto_total_nohumanitario", "Beneficio_Acnur",
+              "Beneficio_Impacto_Gob", "Costos_Impacto_Gob")
+    
+    datatable(sims[, cols], 
+              options = list(pageLength = 10, scrollX = TRUE),
+              rownames = FALSE) |>
+      formatCurrency(columns = cols, currency = "$", digits = 0)
+  })
+  
+  output$resumenTable <- renderDT({
+    sims <- simulaciones()$combinado
+    resumen <- data.frame(
+      Métrica = c("Impacto Total", "Impacto No Hum", "Beneficio ACNUR",
+                  "Beneficio Gob", "Costos", "Prob. Crisis", "Prob. Resiliencia"),
+      Media = c(mean(sims$impacto_total), mean(sims$impacto_total_nohumanitario),
+                mean(sims$Beneficio_Acnur), mean(sims$Beneficio_Impacto_Gob),
+                mean(sims$Costos_Impacto_Gob), mean(sims$crisis_derechos_humanos),
+                mean(sims$resiliencia_comunitaria)),
+      SD = c(sd(sims$impacto_total), sd(sims$impacto_total_nohumanitario),
+             sd(sims$Beneficio_Acnur), sd(sims$Beneficio_Impacto_Gob),
+             sd(sims$Costos_Impacto_Gob), sd(sims$crisis_derechos_humanos),
+             sd(sims$resiliencia_comunitaria)),
+      P5 = c(quantile(sims$impacto_total, 0.05), quantile(sims$impacto_total_nohumanitario, 0.05),
+             quantile(sims$Beneficio_Acnur, 0.05), quantile(sims$Beneficio_Impacto_Gob, 0.05),
+             quantile(sims$Costos_Impacto_Gob, 0.05), quantile(sims$crisis_derechos_humanos, 0.05),
+             quantile(sims$resiliencia_comunitaria, 0.05)),
+      P95 = c(quantile(sims$impacto_total, 0.95), quantile(sims$impacto_total_nohumanitario, 0.95),
+              quantile(sims$Beneficio_Acnur, 0.95), quantile(sims$Beneficio_Impacto_Gob, 0.95),
+              quantile(sims$Costos_Impacto_Gob, 0.95), quantile(sims$crisis_derechos_humanos, 0.95),
+              quantile(sims$resiliencia_comunitaria, 0.95)),
+      stringsAsFactors = FALSE
+    )
+    
+    datatable(resumen, options = list(pageLength = 7)) |>
+      formatCurrency(columns = c("Media", "SD", "P5", "P95"), currency = "$", digits = 0)
+  })
+  
+  # Gráficos de distribuciones
+  output$distGastosSalud <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$gastos_salud_general, type = "histogram", name = "Gastos Salud") |>
+      layout(title = "Gastos Salud General", xaxis = list(title = "Proporción"))
+  })
+  
+  output$distEndeudamiento <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$endeudamiento_prestamos, type = "histogram", name = "Endeudamiento") |>
+      layout(title = "Endeudamiento Préstamos", xaxis = list(title = "Proporción"))
+  })
+  
+  output$distCanastaBasica <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$aumento_canasta_basica, type = "histogram", name = "Canasta Básica") |>
+      layout(title = "Aumento Canasta Básica", xaxis = list(title = "Proporción"))
+  })
+  
+  output$distUsoCUBOS <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$uso_CUBOS, type = "histogram", name = "Uso CUBOS") |>
+      layout(title = "Uso de CUBOS", xaxis = list(title = "Proporción"))
+  })
+  
+  output$distBeneficioPCT <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$beneficio_PCT, type = "histogram", name = "Beneficio PCT") |>
+      layout(title = "Beneficio PCT", xaxis = list(title = "Proporción"))
+  })
+  
+  output$distFalsoPositivo <- renderPlotly({
+    sims <- simulaciones()$combinado
+    plot_ly(x = ~sims$falso_positivo_PCT, type = "histogram", name = "Falso Positivo") |>
+      layout(title = "Falso Positivo PCT", xaxis = list(title = "Proporción"))
+  })
+  
+  # generar_micmac_matrix <- function(pls_data) {
+  #   if (is.null(pls_data)) return(NULL)
+  #   
+  #   n <- nrow(pls_data)
+  #   influencia <- matrix(0, n, n)
+  #   colnames(influencia) <- rownames(influencia) <- pls_data$Variable
+  #   
+  #   # Suposición simple: influencias cruzadas según coeficientes y VIP
+  #   for (i in 1:n) {
+  #     for (j in 1:n) {
+  #       if (i != j) {
+  #         # Influencia como producto del coef de i sobre VIP de j
+  #         influencia[i, j] <- abs(pls_data$Coef[i]) * pls_data$VIP[j]
+  #       }
+  #     }
+  #   }
+  #   return(influencia)
+  # }
+  # 
+  # calcular_influencia_dependencia <- function(matriz) {
+  #   if (is.null(matriz)) return(NULL)
+  #   
+  #   data.frame(
+  #     Variable = rownames(matriz),
+  #     Influencia = rowSums(matriz),
+  #     Dependencia = colSums(matriz)
+  #   )
+  # }
+  # 
+  
+  
+  pls_por_escenario <- function(indices, sims_mc, resultado = "impacto_total") {
+    tryCatch({
+      x_sub <- sims_mc$x[indices, , drop = FALSE]
+      y_sub <- sims_mc$y[indices, resultado, drop = FALSE]
+      
+      obj_mc <- list(
+        x = x_sub,
+        y = y_sub,
+        call = match.call()
+      )
+      class(obj_mc) <- c("mcSimulation", "list")
+      
+      plsr_resultados <- plsr.mcSimulation(object = obj_mc, resultName = resultado)
+      
+      vip_scores <- chillR::VIP(plsr_resultados)[1,]
+      coef_values <- as.numeric(coef(plsr_resultados))
+      
+      data.frame(
+        Variable = names(x_sub),
+        VIP = vip_scores,
+        Coef = coef_values,
+        stringsAsFactors = FALSE
+      )
+    }, error = function(e) {
+      message("Error en el PLS del escenario: ", e$message)
+      return(NULL)
+    })
+  }
+  
+  
+  micmac_por_escenario <- reactive({
+    sims_completo <- simulaciones()
+    sims_mc <- sims_completo$mc
+    sims_df <- sims_completo$combinado
+    
+    if (is.null(sims_mc) || is.null(sims_df)) return(NULL)
+    
+    # Calcular quantiles del Beneficio_Acnur
+    quantiles_rh <- quantile(sims_df$Beneficio_Acnur, probs = c(0.1, 0.5, 0.9), na.rm = TRUE)
+    
+    # Filtrar por índice (para aplicar en sims_mc)
+    idx_pesimista <- which(sims_df$Beneficio_Acnur <= quantiles_rh[1])
+    idx_continuista <- which(sims_df$Beneficio_Acnur > quantiles_rh[1] & sims_df$Beneficio_Acnur <= quantiles_rh[2])
+    idx_optimista <- which(sims_df$Beneficio_Acnur > quantiles_rh[3])
+    
+    list(
+      pesimista = pls_por_escenario(idx_pesimista, sims_mc),
+      continuista = pls_por_escenario(idx_continuista, sims_mc),
+      optimista = pls_por_escenario(idx_optimista, sims_mc)
+    )
+  })
+  
+  
+  generar_matriz_influencias <- function(pls_data) {
+    if (is.null(pls_data) || nrow(pls_data) == 0) return(NULL)
+    
+    n <- nrow(pls_data)
+    var_names <- pls_data$Variable
+    scores <- numeric()
+    
+    # Paso 1: calcular todos los valores posibles (excepto la diagonal)
+    for (i in 1:n) {
+      for (j in 1:n) {
+        if (i != j) {
+          val <- abs(pls_data$Coef[i]) * pls_data$VIP[j]
+          scores <- c(scores, val)
+        }
+      }
+    }
+    
+    # Paso 2: calcular los cuartiles
+    q1 <- quantile(scores, 0.25)
+    q2 <- quantile(scores, 0.5)
+    q3 <- quantile(scores, 0.75)
+    
+    # Paso 3: crear matriz y clasificar
+    mat <- matrix(0, n, n)
+    rownames(mat) <- colnames(mat) <- var_names
+    
+    for (i in 1:n) {
+      for (j in 1:n) {
+        if (i != j) {
+          val <- abs(pls_data$Coef[i]) * pls_data$VIP[j]
+          score <- if (val <= q1) {
+            0
+          } else if (val <= q2) {
+            1
+          } else if (val <= q3) {
+            2
+          } else {
+            3
+          }
+          mat[i, j] <- score
+        }
+      }
+    }
+    return(mat)
+  }
+  
+  
+  
+  calcular_dependencia_influencia <- function(matriz) {
+    if (is.null(matriz)) return(NULL)
+    
+    influencia <- rowSums(matriz)
+    dependencia <- colSums(matriz)
+    
+    if (length(influencia) != length(dependencia)) {
+      warning("Longitudes diferentes en influencia y dependencia.")
+      return(NULL)
+    }
+    
+    media_inf <- mean(influencia)
+    media_dep <- mean(dependencia)
+    
+    clasificacion <- mapply(function(i, d) {
+      if (i < media_inf && d < media_dep) return("Autónoma")
+      if (i < media_inf && d >= media_dep) return("Salida")
+      if (i >= media_inf && d >= media_dep) return("Conflicto")
+      if (i >= media_inf && d < media_dep) return("Poder")
+    }, influencia, dependencia)
+    
+    data.frame(
+      Variable = names(influencia),
+      Influencia = influencia,
+      Dependencia = dependencia,
+      Clasificación = clasificacion,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  
+  
+  output$micmacPlot <- renderPlotly({
+    pls_data <- pls_result()
+    matriz <- generar_matriz_influencias(pls_data)
+    if (is.null(matriz)) return(plotly_empty())
+    
+    resumen <- calcular_dependencia_influencia(matriz)
+    if (is.null(resumen)) return(plotly_empty())
+    
+    # Líneas para el promedio (cuadrantes)
+    mean_x <- mean(resumen$Influencia)
+    mean_y <- mean(resumen$Dependencia)
+    
+    plot_ly(resumen, x = ~Influencia, y = ~Dependencia,
+            type = 'scatter', mode = 'markers+text',
+            text = ~paste(Variable, "<br>Clasificación:", Clasificación),
+            textposition = 'top center',
+            color = ~Clasificación,
+            colors = c("Poder" = "#1f77b4", "Conflicto" = "#ff7f0e",
+                       "Autónoma" = "#2ca02c", "Salida" = "#d62728"),
+            marker = list(size = 10)) |>
+      layout(title = "MICMAC - Influencia vs Dependencia",
+             xaxis = list(title = "Influencia total"),
+             yaxis = list(title = "Dependencia total"),
+             shapes = list(
+               list(type = "line", x0 = mean_x, x1 = mean_x, y0 = 0, y1 = max(resumen$Dependencia), line = list(dash = "dot")),
+               list(type = "line", x0 = 0, x1 = max(resumen$Influencia), y0 = mean_y, y1 = mean_y, line = list(dash = "dot"))
+             ))
+  })
+  
+  render_micmac_plot <- function(pls_data) {
+    matriz <- generar_matriz_influencias(pls_data)
+    if (is.null(matriz)) return(plotly_empty())
+    
+    resumen <- calcular_dependencia_influencia(matriz)
+    if (is.null(resumen)) return(plotly_empty())
+    
+    mean_x <- mean(resumen$Influencia)
+    mean_y <- mean(resumen$Dependencia)
+    
+    plot_ly(resumen, x = ~Influencia, y = ~Dependencia,
+            text = ~paste(Variable, "<br>Clasificación:", Clasificación),
+            type = 'scatter', mode = 'markers+text',
+            textposition = 'top center',
+            color = ~Clasificación,
+            colors = c("Poder" = "#1f77b4", "Conflicto" = "#ff7f0e",
+                       "Autónoma" = "#2ca02c", "Salida" = "#d62728"),
+            marker = list(size = 10)) |>
+      layout(title = "MICMAC - Influencia vs Dependencia",
+             xaxis = list(title = "Influencia total"),
+             yaxis = list(title = "Dependencia total"),
+             shapes = list(
+               list(type = "line", x0 = mean_x, x1 = mean_x, y0 = 0, y1 = max(resumen$Dependencia), line = list(dash = "dot")),
+               list(type = "line", x0 = 0, x1 = max(resumen$Influencia), y0 = mean_y, y1 = mean_y, line = list(dash = "dot"))
+             ))
+  }
+  
+  output$micmacPesimista <- renderPlotly({
+    pls <- micmac_por_escenario()$pesimista
+    render_micmac_plot(pls)
+  })
+  
+  output$tablaPesimista <- renderDT({
+    pls <- micmac_por_escenario()$pesimista
+    matriz <- generar_matriz_influencias(pls)
+    calcular_dependencia_influencia(matriz)
+  })
+  
+  output$micmacContinuista <- renderPlotly({
+    pls <- micmac_por_escenario()$continuista
+    render_micmac_plot(pls)
+  })
+  
+  output$tablaContinuista <- renderDT({
+    pls <- micmac_por_escenario()$continuista
+    matriz <- generar_matriz_influencias(pls)
+    calcular_dependencia_influencia(matriz)
+  })
+  
+  output$micmacOptimista <- renderPlotly({
+    pls <- micmac_por_escenario()$optimista
+    render_micmac_plot(pls)
+  })
+  
+  output$tablaOptimista <- renderDT({
+    pls <- micmac_por_escenario()$optimista
+    matriz <- generar_matriz_influencias(pls)
+    calcular_dependencia_influencia(matriz)
+  })
+  
+  output$micmacTable <- renderDT({
+    pls_data <- pls_result()
+    matriz <- generar_matriz_influencias(pls_data)
+    if (is.null(matriz)) return(NULL)
+    
+    resumen <- calcular_dependencia_influencia(matriz)
+    datatable(resumen, options = list(pageLength = 10))
+  })
+  
+  library(dendextend)
+  
+  generar_dendrograma <- function(matriz, tipo = "dependencia") {
+    if (is.null(matriz)) return(NULL)
+    
+    if (tipo == "dependencia") {
+      # Similaridad entre columnas
+      data <- t(matriz)  # columnas como filas
+    } else {
+      # Similaridad entre filas
+      data <- matriz
+    }
+    
+    distancias <- dist(data, method = "euclidean")  # o "maximum", "manhattan"
+    cluster <- hclust(distancias, method = "ward.D2")  # o "complete", "average"
+    dend <- as.dendrogram(cluster)
+    
+    return(dend)
+  }
+  
+  output$dendroDepPesimista <- renderPlot({
+    pls <- micmac_por_escenario()$pesimista
+    matriz <- generar_matriz_influencias(pls)
+    dend <- generar_dendrograma(matriz, tipo = "dependencia")
+    dend <- dend %>% set("labels_cex", 0.8)
+    if (!is.null(dend)) plot(dend, main = "Dendrograma de Dependencia - Pesimista")
+  })
+  
+  output$dendroInfPesimista <- renderPlot({
+    pls <- micmac_por_escenario()$pesimista
+    matriz <- generar_matriz_influencias(pls)
+    dend <- generar_dendrograma(matriz, tipo = "influencia")
+    dend <- dend %>% set("labels_cex", 0.8)
+    if (!is.null(dend)) plot(dend, main = "Dendrograma de Influencia - Pesimista")
+  })
+  
+  
+  
+  generar_bn_desde_matriz_micmac <- function(matriz_influencia, sims_df = NULL, umbral = 0) {
+    if (is.null(matriz_influencia)) return(NULL)
+    
+    if (is.data.frame(matriz_influencia)) {
+      matriz_influencia <- as.matrix(matriz_influencia)
+    }
+    
+    nodos <- rownames(matriz_influencia)
+    
+    # Crear grafo vacío
+    red <- empty.graph(nodes = nodos)
+    
+    # Limpiar arcos para evitar ciclos
+    arcos <- list()
+    for (i in seq_along(nodos)) {
+      for (j in seq_along(nodos)) {
+        if (i != j) {
+          peso_ij <- matriz_influencia[i,j]
+          peso_ji <- matriz_influencia[j,i]
+          
+          if (peso_ij > umbral & peso_ij > peso_ji) {
+            arcos <- append(arcos, list(c(nodos[i], nodos[j])))
+          }
+        }
+      }
+    }
+    
+    # Poner arcos en la red
+    if (length(arcos) > 0) {
+      arcs_mat <- do.call(rbind, arcos)
+      red <- empty.graph(nodes = nodos)
+      arcs(red) <- arcs_mat
+    }
+    
+    if (is.null(sims_df)) {
+      return(list(estructura = red))
+    }
+    
+    datos_bn <- sims_df %>%
+      dplyr::select(any_of(nodos)) %>%
+      dplyr::mutate(dplyr::across(dplyr::everything(), ~ as.factor(round(.)))) %>%
+      dplyr::select(where(~ length(unique(.)) > 1))
+    
+    nodos_filtrados <- colnames(datos_bn)
+    red <- empty.graph(nodes = nodos_filtrados)
+    
+    arcos_filtrados <- arcs_mat[
+      arcs_mat[,1] %in% nodos_filtrados & 
+        arcs_mat[,2] %in% nodos_filtrados, , drop = FALSE
+    ]
+    
+    if (nrow(arcos_filtrados) > 0) {
+      arcs(red) <- arcos_filtrados
+    }
+    
+    red_fit <- bn.fit(red, datos_bn)
+    
+    return(list(estructura = red, red = red_fit, datos = datos_bn))
+  }
+  
+  
+  
+  
+  # output$redBayesianaPlot <- renderPlot({
+  #   matriz <- micmac_por_escenario()$pesimista  # Debe ser matriz de influencias
+  #   sims_df <- simulaciones()$combinado  # Opcional
+  #   matriz2 <- generar_matriz_influencias(matriz)
+  #   print(matriz2)
+  #   bn_result <- generar_bn_desde_matriz_micmac(matriz_influencia = matriz2, sims_df = sims_df)
+  #   print( bn_result)
+  #   if (is.null(bn_result)) return(NULL)
+  #   
+  #   bnlearn::graphviz.plot(bn_result$red,
+  #                          main = "Red Bayesiana desde matriz MICMAC",
+  #                          shape = "ellipse")
+  # })
+  # 
+  
+  
+  output$redBayesianaPlot <- renderVisNetwork({
+    matriz <- micmac_por_escenario()$pesimista
+    sims_df <- simulaciones()$combinado
+    matriz2 <- generar_matriz_influencias(matriz)
+    
+    bn_result <- generar_bn_desde_matriz_micmac(matriz_influencia = matriz2, sims_df = sims_df)
+    if (is.null(bn_result)) return(NULL)
+    
+    nodos <- data.frame(
+      id = nodes(bn_result$estructura),
+      label = nodes(bn_result$estructura)
+    )
+    
+    aristas <- as.data.frame(arcs(bn_result$estructura))
+    colnames(aristas) <- c("from", "to")
+    
+    visNetwork(nodos, aristas) %>%
+      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+      visInteraction(dragNodes = TRUE, dragView = TRUE, zoomView = TRUE) %>%
+      visPhysics(
+        solver = "forceAtlas2Based",  # modelo de fuerza
+        forceAtlas2Based = list(
+          gravitationalConstant = -50,  # aumenta la repulsión entre nodos (más negativo = más separación)
+          centralGravity = 0.01,         # gravedad central baja para que nodos no se aglomeren
+          springLength = 200,            # longitud del resorte (mayor = más separación)
+          springConstant = 0.01          # constante de resorte (afecta rigidez)
+        ),
+        stabilization = list(enabled = TRUE, iterations = 1000)
+      ) %>%
+      visLayout(randomSeed = 123)
+  })
+  
+  
+  render_micmac_bayesian <- function(pls_data) {
+    matriz <- generar_matriz_influencias(pls_data)
+    if (is.null(matriz)) return(plotly_empty())
+    
+    resumen <- calcular_dependencia_influencia(matriz)
+    if (is.null(resumen)) return(plotly_empty())
+    
+    mean_x <- mean(resumen$Influencia)
+    mean_y <- mean(resumen$Dependencia)
+    
+    plot_ly(resumen, x = ~Influencia, y = ~Dependencia,
+            text = ~paste(Variable, "<br>Clasificación:", Clasificación),
+            type = 'scatter', mode = 'markers+text',
+            textposition = 'top center',
+            color = ~Clasificación,
+            colors = c("Poder" = "#1f77b4", "Conflicto" = "#ff7f0e",
+                       "Autónoma" = "#2ca02c", "Salida" = "#d62728"),
+            marker = list(size = 10)) |>
+      layout(title = "MICMAC - Influencia vs Dependencia",
+             xaxis = list(title = "Influencia total"),
+             yaxis = list(title = "Dependencia total"),
+             shapes = list(
+               list(type = "line", x0 = mean_x, x1 = mean_x, y0 = 0, y1 = max(resumen$Dependencia), line = list(dash = "dot")),
+               list(type = "line", x0 = 0, x1 = max(resumen$Influencia), y0 = mean_y, y1 = mean_y, line = list(dash = "dot"))
+             ))
+  }
+  
+  render_bn_plot <- function(pls_data, sims_df) {
+    matriz <- generar_matriz_influencias(pls_data)
+    bn_result <- generar_bn_desde_matriz_micmac(matriz_influencia = matriz, sims_df = sims_df)
+    if (is.null(bn_result)) return(NULL)
+    
+    nodos <- data.frame(
+      id = nodes(bn_result$estructura),
+      label = nodes(bn_result$estructura)
+    )
+    
+    aristas <- as.data.frame(arcs(bn_result$estructura))
+    colnames(aristas) <- c("from", "to")
+    
+    visNetwork(nodos, aristas, width = "100%", height = "800px") %>%  # Tamaño grande
+      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+      visInteraction(dragNodes = TRUE, dragView = TRUE, zoomView = TRUE) %>%
+      visPhysics(
+        solver = "forceAtlas2Based",
+        forceAtlas2Based = list(
+          gravitationalConstant = -50,
+          centralGravity = 0.01,
+          springLength = 200,
+          springConstant = 0.01
+        ),
+        stabilization = list(enabled = TRUE, iterations = 1000)
+      ) %>%
+      visLayout(randomSeed = 123)
+  }
+  
+  output$redBayesianaPesimista <- renderVisNetwork({
+    pls <- micmac_por_escenario()$pesimista
+    sims_df <- simulaciones()$combinado
+    render_bn_plot(pls, sims_df)
+  })
+  
+  output$redBayesianaContinuista <- renderVisNetwork({
+    pls <- micmac_por_escenario()$continuista
+    sims_df <- simulaciones()$combinado
+    render_bn_plot(pls, sims_df)
+  })
+  
+  output$redBayesianaOptimista <- renderVisNetwork({
+    pls <- micmac_por_escenario()$optimista
+    sims_df <- simulaciones()$combinado
+    render_bn_plot(pls, sims_df)
+  })
+  
+  
+  
+  #visNetworkOutput("redBayesianaPlot")
+  
+  
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)
